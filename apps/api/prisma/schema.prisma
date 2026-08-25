@@ -31,13 +31,31 @@ enum ProcessingStatus {
   failed
 }
 
+/// Category of revenue leakage identified by the deterministic detection
+/// engine. Mirrors RecoveryOpportunityType in src/domain/recovery-opportunity.ts.
+enum RecoveryOpportunityType {
+  FAILED_PAYMENT
+  SUBSCRIPTION_PAYMENT_FAILED
+  CHECKOUT_DROPOFF
+}
+
+/// Lifecycle of a recovery opportunity.
+/// Mirrors RecoveryOpportunityStatus in src/domain/recovery-opportunity.ts.
+enum RecoveryOpportunityStatus {
+  OPEN
+  RECOVERED
+  EXPIRED
+  DISMISSED
+}
+
 model Merchant {
-  id              String           @id @default(uuid()) @db.Uuid
+  id              String                @id @default(uuid()) @db.Uuid
   name            String
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
   paymentAccounts PaymentAccount[]
   paymentEvents   PaymentEvent[]
+  opportunities   RecoveryOpportunity[]
 
   @@map("merchants")
 }
@@ -54,6 +72,7 @@ model PaymentAccount {
   updatedAt         DateTime                  @updatedAt
   merchant          Merchant                  @relation(fields: [merchantId], references: [id], onDelete: Cascade)
   paymentEvents     PaymentEvent[]
+  opportunities     RecoveryOpportunity[]
 
   @@unique([provider, environment, externalAccountId])
   @@index([merchantId])
@@ -61,27 +80,29 @@ model PaymentAccount {
 }
 
 model PaymentEvent {
-  id                 String           @id @default(uuid()) @db.Uuid
-  paymentAccountId   String?          @db.Uuid
-  merchantId         String?          @db.Uuid
-  provider           PaymentProvider
-  providerEventId    String
-  eventType          String
-  providerPaymentId  String?
-  providerOrderId    String?
-  eventCreatedAt     DateTime
-  receivedAt         DateTime         @default(now())
-  payload            Json
-  normalizedData     Json?
-  signatureVerified  Boolean          @default(false)
-  processingStatus   ProcessingStatus @default(pending)
-  processingAttempts Int              @default(0)
-  processedAt        DateTime?
-  failureReason      String?
-  createdAt          DateTime         @default(now())
-  updatedAt          DateTime         @updatedAt
-  paymentAccount     PaymentAccount?  @relation(fields: [paymentAccountId], references: [id], onDelete: SetNull)
-  merchant           Merchant?        @relation(fields: [merchantId], references: [id], onDelete: SetNull)
+  id                     String                @id @default(uuid()) @db.Uuid
+  paymentAccountId       String?               @db.Uuid
+  merchantId             String?               @db.Uuid
+  provider               PaymentProvider
+  providerEventId        String
+  eventType              String
+  providerPaymentId      String?
+  providerOrderId        String?
+  eventCreatedAt         DateTime
+  receivedAt             DateTime              @default(now())
+  payload                Json
+  normalizedData         Json?
+  signatureVerified      Boolean               @default(false)
+  processingStatus       ProcessingStatus      @default(pending)
+  processingAttempts     Int                   @default(0)
+  processedAt            DateTime?
+  failureReason          String?
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
+  paymentAccount         PaymentAccount?       @relation(fields: [paymentAccountId], references: [id], onDelete: SetNull)
+  merchant               Merchant?             @relation(fields: [merchantId], references: [id], onDelete: SetNull)
+  sourceOpportunities    RecoveryOpportunity[] @relation("OpportunitySourceEvent")
+  recoveredOpportunities RecoveryOpportunity[] @relation("OpportunityRecoveryEvent")
 
   /// Idempotency: one record per provider event identity. Razorpay payloads do
   /// not carry a dedicated event id, so the adapter derives a stable identity
@@ -93,4 +114,43 @@ model PaymentEvent {
   @@index([processingStatus])
   @@index([receivedAt])
   @@map("payment_events")
+}
+
+model RecoveryOpportunity {
+  id                String                    @id @default(uuid()) @db.Uuid
+  merchantId        String?                   @db.Uuid
+  paymentAccountId  String?                   @db.Uuid
+  type              RecoveryOpportunityType
+  status            RecoveryOpportunityStatus @default(OPEN)
+  sourceEventId     String                    @db.Uuid
+  providerPaymentId String?
+  providerOrderId   String?
+  /// Amount in the provider's smallest currency unit (paise for INR). Always
+  /// derived from the source payment event; never estimated.
+  amountAtRisk      Int
+  currency          String
+  reason            String
+  evidence          Json
+  /// Payment event that realized the revenue again (e.g. a captured retry),
+  /// required for RECOVERED status. Never fabricated.
+  recoveryEventId   String?                   @db.Uuid
+  detectedAt        DateTime                  @default(now())
+  expiresAt         DateTime?
+  resolvedAt        DateTime?
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+  merchant          Merchant?                 @relation(fields: [merchantId], references: [id], onDelete: SetNull)
+  paymentAccount    PaymentAccount?           @relation(fields: [paymentAccountId], references: [id], onDelete: SetNull)
+  sourceEvent       PaymentEvent              @relation("OpportunitySourceEvent", fields: [sourceEventId], references: [id], onDelete: Cascade)
+  recoveryEvent     PaymentEvent?             @relation("OpportunityRecoveryEvent", fields: [recoveryEventId], references: [id], onDelete: SetNull)
+
+  /// Idempotency: one opportunity per (source event, detection category).
+  @@unique([sourceEventId, type])
+  @@index([merchantId])
+  @@index([status])
+  @@index([type])
+  @@index([detectedAt])
+  @@index([providerPaymentId])
+  @@index([providerOrderId])
+  @@map("recovery_opportunities")
 }

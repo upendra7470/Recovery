@@ -1,0 +1,200 @@
+import type { FastifyPluginAsync } from 'fastify';
+import { NotFoundError } from '../lib/errors.js';
+import { parseWith } from '../validation/parse.js';
+import {
+  listOpportunitiesQuerySchema,
+  type OpportunityStatusSummary,
+  type RecoveryOpportunityRow,
+} from '../domain/recovery-opportunity.js';
+import { toEventView } from '../detection/event-view.js';
+import type { AppDatabase } from '../lib/database.js';
+
+export interface OpportunitySummaryResponse {
+  id: string;
+  merchantId: string | null;
+  paymentAccountId: string | null;
+  type: RecoveryOpportunityRow['type'];
+  status: RecoveryOpportunityRow['status'];
+  providerPaymentId: string | null;
+  providerOrderId: string | null;
+  /** Minor currency units (paise for INR). */
+  amountAtRisk: number;
+  currency: string;
+  reason: string;
+  detectedAt: Date;
+  expiresAt: Date | null;
+}
+
+export interface OpportunityListResponse {
+  opportunities: OpportunitySummaryResponse[];
+  total: number;
+}
+
+export interface SourceEventSummary {
+  id: string;
+  eventType: string;
+  providerPaymentId: string | null;
+  providerOrderId: string | null;
+  /** Minor currency units (paise for INR); omitted when unknown. */
+  amount?: number;
+  currency?: string;
+  status?: string;
+  occurredAt: string;
+}
+
+export interface OpportunityDetailResponse extends OpportunitySummaryResponse {
+  evidence: unknown;
+  resolvedAt: Date | null;
+  recoveryEventId: string | null;
+  sourceEvent: SourceEventSummary | null;
+}
+
+export interface CurrencyBreakdown {
+  currency: string;
+  revenueAtRisk: number;
+  recoveredAmount: number;
+}
+
+export interface OpportunitiesOverviewResponse {
+  openOpportunities: number;
+  failedPayments: number;
+  /** Per-currency totals; currencies are never mixed into one number. */
+  currencies: CurrencyBreakdown[];
+}
+
+function toSummaryResponse(row: RecoveryOpportunityRow): OpportunitySummaryResponse {
+  return {
+    id: row.id,
+    merchantId: row.merchantId,
+    paymentAccountId: row.paymentAccountId,
+    type: row.type,
+    status: row.status,
+    providerPaymentId: row.providerPaymentId,
+    providerOrderId: row.providerOrderId,
+    amountAtRisk: row.amountAtRisk,
+    currency: row.currency,
+    reason: row.reason,
+    detectedAt: row.detectedAt,
+    expiresAt: row.expiresAt,
+  };
+}
+
+function toCurrencyBreakdowns(summaries: OpportunityStatusSummary[]): CurrencyBreakdown[] {
+  const byCurrency = new Map<string, CurrencyBreakdown>();
+  for (const summary of summaries) {
+    let entry = byCurrency.get(summary.currency);
+    if (entry === undefined) {
+      entry = { currency: summary.currency, revenueAtRisk: 0, recoveredAmount: 0 };
+      byCurrency.set(summary.currency, entry);
+    }
+    if (summary.status === 'OPEN') {
+      entry.revenueAtRisk += summary.totalAmountAtRisk;
+    }
+    if (summary.status === 'RECOVERED') {
+      entry.recoveredAmount += summary.totalAmountAtRisk;
+    }
+  }
+  return [...byCurrency.values()].sort((a, b) => a.currency.localeCompare(b.currency));
+}
+
+/**
+ * Internal read API for recovery opportunities. All queries honor the
+ * merchantId filter so responses never cross tenant boundaries. Raw webhook
+ * payloads and customer PII are never exposed — only detection evidence and
+ * non-sensitive source-event fields.
+ */
+export const opportunityRoutes: FastifyPluginAsync = async (app) => {
+  const repository = app.opportunities;
+
+  app.get<{ Querystring: Record<string, unknown>; Reply: OpportunityListResponse }>(
+    '/opportunities',
+    async (request, reply) => {
+      const query = parseWith(listOpportunitiesQuerySchema, request.query);
+      const filters = {
+        merchantId: query.merchantId,
+        status: query.status,
+        type: query.type,
+        ...(query.from !== undefined ? { detectedFrom: new Date(query.from) } : {}),
+        ...(query.to !== undefined ? { detectedTo: new Date(query.to) } : {}),
+      };
+
+      const [rows, total] = await Promise.all([
+        repository.list(filters),
+        repository.count(filters),
+      ]);
+
+      const body: OpportunityListResponse = {
+        opportunities: rows.map(toSummaryResponse),
+        total,
+      };
+      return reply.send(body);
+    }
+  );
+
+  app.get<{ Querystring: Record<string, unknown>; Reply: OpportunitiesOverviewResponse }>(
+    '/opportunities/overview',
+    async (request, reply) => {
+      const query = parseWith(
+        listOpportunitiesQuerySchema.pick({ merchantId: true }),
+        request.query
+      );
+      const merchantId = query.merchantId;
+
+      const [summaries, failedPayments] = await Promise.all([
+        repository.summarizeByStatusAndCurrency(merchantId),
+        repository.countByType('FAILED_PAYMENT', merchantId),
+      ]);
+
+      const openCount = summaries
+        .filter((summary) => summary.status === 'OPEN')
+        .reduce((total, summary) => total + summary.count, 0);
+
+      const body: OpportunitiesOverviewResponse = {
+        openOpportunities: openCount,
+        failedPayments,
+        currencies: toCurrencyBreakdowns(summaries),
+      };
+      return reply.send(body);
+    }
+  );
+
+  app.get<{ Params: { id: string }; Reply: OpportunityDetailResponse }>(
+    '/opportunities/:id',
+    async (request, reply) => {
+      const { id } = request.params;
+      const opportunity = await repository.findById(id);
+      if (opportunity === null) {
+        throw new NotFoundError('Recovery opportunity');
+      }
+
+      const sourceEvent = await findSourceEvent(app.db, opportunity.sourceEventId);
+      let sourceEventSummary: SourceEventSummary | null = null;
+      if (sourceEvent !== null) {
+        const view = toEventView(sourceEvent);
+        sourceEventSummary = {
+          id: view.id,
+          eventType: view.eventType,
+          providerPaymentId: view.providerPaymentId,
+          providerOrderId: view.providerOrderId,
+          ...(view.amount !== null ? { amount: view.amount } : {}),
+          ...(view.currency !== null ? { currency: view.currency } : {}),
+          ...(view.status !== null ? { status: view.status } : {}),
+          occurredAt: view.occurredAt.toISOString(),
+        };
+      }
+
+      const body: OpportunityDetailResponse = {
+        ...toSummaryResponse(opportunity),
+        evidence: opportunity.evidence,
+        resolvedAt: opportunity.resolvedAt,
+        recoveryEventId: opportunity.recoveryEventId,
+        sourceEvent: sourceEventSummary,
+      };
+      return reply.send(body);
+    }
+  );
+};
+
+async function findSourceEvent(db: AppDatabase, sourceEventId: string) {
+  return db.paymentEvent.findById(sourceEventId);
+}

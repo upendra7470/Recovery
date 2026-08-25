@@ -69,6 +69,8 @@ export interface NormalizedPaymentEventData {
   errorSource: string | null;
   errorStep: string | null;
   errorReason: string | null;
+  /** Provider subscription identifier for recurring payments, when present. */
+  subscriptionId: string | null;
   paymentCreatedAt: string | null;
   occurredAt: string;
 }
@@ -114,6 +116,18 @@ export interface PaymentEventStore {
     provider: PaymentProviderName,
     providerEventId: string
   ): Promise<PaymentEventRow | null>;
+  findById(id: string): Promise<PaymentEventRow | null>;
+  /**
+   * Events correlated to a payment/order identity within a time range — the
+   * evidence window used by detection rules (e.g. "did a captured payment
+   * follow this failure?").
+   */
+  findRelatedByOrderOrPayment(args: {
+    providerPaymentId: string | null;
+    providerOrderId: string | null;
+    occurredAfter: Date;
+    occurredBefore: Date;
+  }): Promise<PaymentEventRow[]>;
 }
 
 /** Read-only lookup boundary for payment accounts during ingestion. */

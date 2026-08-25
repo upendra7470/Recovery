@@ -1,5 +1,5 @@
 import type { NormalizedPaymentEvent, PaymentProviderAdapter } from '../domain/provider-adapter.js';
-import type { AccountReference } from '../domain/payment-event.js';
+import type { AccountReference, PaymentEventRow } from '../domain/payment-event.js';
 import type { PaymentEventRepository } from '../repositories/payment-event.repository.js';
 import { InternalError, ValidationError } from '../lib/errors.js';
 import { toJsonValue } from '../lib/json.js';
@@ -23,6 +23,8 @@ export interface WebhookProcessingResult {
   status: WebhookEventStatus;
   isNew: boolean;
   eventType: string;
+  /** The persisted event row, when the payload was ingested (null for unsupported). */
+  event: PaymentEventRow | null;
 }
 
 /**
@@ -64,6 +66,7 @@ export class WebhookService {
         isNew: false,
         status: 'unsupported',
         eventType,
+        event: null,
       };
     }
 
@@ -88,6 +91,7 @@ export class WebhookService {
       isNew: persisted.isNew,
       status: persisted.isNew ? 'processed' : 'duplicate',
       eventType,
+      event: persisted.event,
     };
   }
 

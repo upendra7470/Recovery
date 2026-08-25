@@ -95,6 +95,25 @@ describe('parseEnv', () => {
       parseEnv({ ...VALID_BASE, DEFAULT_TEST_PAYMENT_ACCOUNT_ID: 'not-a-uuid' })
     ).toThrow(ConfigError);
   });
+
+  it('defaults DETECTION_WINDOW_HOURS to 24', () => {
+    const env = parseEnv({ DATABASE_URL: 'postgresql://u:p@localhost:5432/db' });
+    expect(env.DETECTION_WINDOW_HOURS).toBe(24);
+  });
+
+  it('coerces DETECTION_WINDOW_HOURS from a string and keeps explicit values', () => {
+    const env = parseEnv({ ...VALID_BASE, DETECTION_WINDOW_HOURS: '72' });
+    expect(env.DETECTION_WINDOW_HOURS).toBe(72);
+  });
+
+  it('rejects an out-of-range DETECTION_WINDOW_HOURS', () => {
+    expect(() => parseEnv({ ...VALID_BASE, DETECTION_WINDOW_HOURS: '0' })).toThrow(ConfigError);
+    expect(() => parseEnv({ ...VALID_BASE, DETECTION_WINDOW_HOURS: '721' })).toThrow(ConfigError);
+  });
+
+  it('rejects a non-integer DETECTION_WINDOW_HOURS', () => {
+    expect(() => parseEnv({ ...VALID_BASE, DETECTION_WINDOW_HOURS: '1.5' })).toThrow(ConfigError);
+  });
 });
 
 describe('loadEnv', () => {

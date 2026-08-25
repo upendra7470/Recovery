@@ -51,10 +51,11 @@ Next.js route handlers:
 | Web (`@recoveryos/web`) | 3000 | Next.js App Router, server components |
 | PostgreSQL | 5432 | Docker Compose or native install |
 
-The web Overview page calls `GET /health` **server-side** through
-`apps/web/src/lib/api/status.ts`. There are no browser→API calls in Phase 1, so
-CORS is intentionally not enabled. When the dashboard later calls the API from
-the browser, CORS will be added with an explicit allow-list — never a wildcard.
+The web Overview page calls `GET /health` and the opportunities read API
+**server-side** through `apps/web/src/lib/api/*`. There are no browser→API
+calls yet, so CORS is intentionally not enabled. When the dashboard later calls
+the API from the browser, CORS will be added with an explicit allow-list —
+never a wildcard.
 
 ## 4. API design conventions
 
@@ -97,9 +98,11 @@ routes → services → repositories → Prisma/PostgreSQL
 - Provider-specific logic (signature schemes, payload dialects) lives behind
   the `PaymentProviderAdapter` interface in `adapters/`, never inside routes.
 - Repositories depend on narrow store interfaces (`PaymentEventStore`,
-  `PaymentAccountLookupStore`), not the full Prisma client — this keeps them
-  unit-testable and ORM-swappable. The only Prisma-touched code is
-  `repositories/prisma-stores.ts` and `lib/prisma.ts`.
+  `PaymentAccountLookupStore`, `RecoveryOpportunityStore`), not the full Prisma
+  client — this keeps them unit-testable and ORM-swappable. The only
+  Prisma-touched code is `repositories/prisma-stores.ts` and `lib/prisma.ts`.
+- Deterministic engines (e.g. `detection/`) are pure functions with no I/O;
+  persistence happens only in services/repositories.
 - Domain types are plain TypeScript; persistence shapes do not leak outward.
 - Configuration is parsed once at startup by Zod (`config/env.ts`) and fails
   fast on invalid values; nothing reads `process.env` ad hoc inside features.
@@ -154,6 +157,61 @@ Supported events: `payment.authorized`, `payment.captured`,
 `payment.failed`. Other Razorpay events are acknowledged with
 `status: "unsupported"` and are not persisted.
 
+## 5.2 Revenue leakage detection engine (Phase 3)
+
+```
+payment_events (persisted row)
+      │
+      ▼
+RevenueLeakageService                  services/revenue-leakage.service.ts
+      │  runs after every processed ingestion; detection failure never
+      │  fails the webhook response
+      ▼
+Related-event correlation              PaymentEventStore.findRelatedByOrderOrPayment
+      │  same payment/order id inside DETECTION_WINDOW_HOURS; ordered,
+      │  window-bounded
+      ▼
+Deterministic rules                    detection/rules/*.rule.ts
+      │  pure functions: (event, related, config) → finding | null
+      │  • SubscriptionPaymentFailedRule  — failed + subscription_id present
+      │  • FailedPaymentRule              — failed, no successful follow-up
+      │  • CheckoutDropoffRule            — authorized, never captured/declined
+      │    (expires after the window)
+      │  Rules are mutually exclusive: exactly one category per event.
+      ▼
+Opportunity persistence                repositories/recovery-opportunity.repository.ts
+      │  unique (source_event_id, type); P2002 races re-read the winning row;
+      │  merchant/account attribution copied only from the source event
+      ▼
+Recovery resolution                    captured event correlated by payment/order id
+                                         → OPEN opportunities become RECOVERED with
+                                           recovery_event_id + resolvedAt recorded
+```
+
+Key decisions:
+
+- **No LLMs anywhere in this path.** The engine is fully deterministic and
+  auditable: a finding can always be traced back to stored rows.
+- **Conservative by default.** A failure with any later capture for the same
+  payment/order produces nothing; an authorization is only treated as drop-off
+  when neither a capture nor an explicit decline exists in the window.
+- **Never invent money.** Findings missing amount or currency are skipped, not
+  estimated. Evidence JSON records the exact source values.
+- **Idempotent replays.** Re-processing the same webhook yields `no-action`
+  thanks to the `(source_event_id, type)` unique constraint.
+- **Tenant isolation.** Attribution (`merchant_id`, `payment_account_id`) flows
+  exclusively from the persisted source event; resolution lookups match on
+  strict equality of those columns, so one merchant's capture can never close
+  another merchant's opportunity.
+- **Ingestion stays primary.** Detection runs post-ingestion inside a
+  try/catch; a detection bug degrades to "no opportunities" rather than failing
+  webhook deliveries.
+
+Read surface: `GET /opportunities` (list+count), `GET /opportunities/overview`
+(status/currency aggregates via SQL groupBy), `GET /opportunities/:id` (detail
+with evidence + source-event summary). All honor an optional `merchantId`
+filter; raw payloads and customer PII are never exposed.
+
 ## 6. Logging & observability
 
 Structured JSON logs via pino: ISO timestamps, level, `service:"recoveryos"`,
@@ -193,11 +251,20 @@ duplicate|unsupported|failed], attempt counters, failure reason, and optional
 `SET NULL` relations to payment account and merchant. Uniqueness on
 `(provider, provider_event_id)` enforces idempotent ingestion at the database.
 
-Later phases will add (non-exhaustive): simulation/replay datasets (P3), risk
-assessments (P4), decisions + rationale + policy evaluations (P5–P7), recovery
-actions + attempts (P8), outcome verifications (P9), append-only recovery
-ledger entries (P10), merchant memory embeddings/summaries (P11). Each lands as
-its own migration; enums evolve additively.
+Phase 3 added `recovery_opportunities` (migration
+`20260825154107_add_recovery_opportunities`): type enum
+[FAILED_PAYMENT|SUBSCRIPTION_PAYMENT_FAILED|CHECKOUT_DROPOFF], status enum
+[OPEN|RECOVERED|EXPIRED|DISMISSED] (only OPEN→RECOVERED transitions today),
+amount/currency copied from the source event in minor units, mandatory evidence
+JSON, detected/expires/resolved timestamps, cascade FK to the source event,
+`SET NULL` FK to the recovery event, and indexed merchant/account columns.
+Uniqueness on `(source_event_id, type)` makes detection idempotent.
+
+Later phases will add (non-exhaustive): simulation/replay datasets (P5),
+decisions + rationale + policy evaluations (P6–P8), recovery actions + attempts
+(P9), outcome verifications (P10), append-only recovery ledger entries (P11),
+merchant memory embeddings/summaries (P12). Each lands as its own migration;
+enums evolve additively.
 
 ## 9. Testing strategy
 
@@ -212,7 +279,12 @@ Vitest, node environment, no live DB required for CI determinism:
 - Ingestion: adapter unit tests (signatures, validation, normalization),
   repository idempotency tests (unique-violation resolution), and route tests
   against an in-memory store enforcing the same unique constraint as Postgres.
-- Web: pure formatting logic (`formatInr`, `formatPercent`).
+- Detection: rule-level tests (correlation suppression, missing-data skips,
+  expiry math, mutual exclusivity), detector determinism, service-level
+  opportunity creation/resolution with tenant isolation and replay idempotency,
+  P2002 fallback in the repository, opportunities route filters/overview/detail
+  contracts, and end-to-end webhook → detection → recovery flow tests.
+- Web: pure formatting logic (`formatInr`, `formatMinorAmount`, `formatPercent`).
 
 Integration-style tests against a live PostgreSQL run naturally during local
 verification (`/ready` checks); dedicated DB-backed test suites arrive with the
@@ -223,16 +295,16 @@ first data-bearing phase.
 | Phase | New capability | Where it plugs in |
 | --- | --- | --- |
 | 2 ✅ | Razorpay webhooks | `routes/webhooks.ts` + `adapters/razorpay.ts` + `PaymentEventRepository` |
-| 3 | Simulation/replay | `services/simulation` reusing event normalization |
-| 4 | Risk engine | `domain/risk` + `services/risk`; scheduled/batch entrypoint |
-| 5 | Context/pattern/memory | `services/intelligence/*`, new repos |
-| 6 | AI decision agent | behind a provider interface; deterministic fallbacks required |
-| 7 | Policy engine | pure functions over decisions; fail-closed defaults |
-| 8 | Action orchestrator | `services/actions` + outbox pattern on existing Postgres |
-| 9 | Outcome verification | consumes orchestrator results, writes ledger candidates |
-| 10 | Recovery ledger | append-only table + read APIs |
-| 11 | Adaptive memory | evolves merchant memory schemas/consumers |
-| 12–14 | Modules, voice, full dashboard | new route modules + dashboard sections |
+| 3 ✅ | Revenue leakage detection | `detection/` rules + detector, `services/revenue-leakage.service.ts`, `RecoveryOpportunityRepository`, `routes/opportunities.ts` |
+| 5 | Simulation/replay | `services/simulation` reusing event normalization |
+| 6–8 | Intelligence/context/pattern/memory | `services/intelligence/*`, new repos |
+| 7 | AI decision agent | behind a provider interface; deterministic fallbacks required |
+| 8 | Policy engine | pure functions over decisions; fail-closed defaults |
+| 9 | Action orchestrator | `services/actions` + outbox pattern on existing Postgres |
+| 10 | Outcome verification | consumes orchestrator results, writes ledger candidates |
+| 11 | Recovery ledger | append-only table + read APIs |
+| 12 | Adaptive memory | evolves merchant memory schemas/consumers |
+| 13–15 | Modules, voice, full dashboard | new route modules + dashboard sections |
 
 The foundation's stable seams — validated config, structured logging, central
 error handling, repository boundaries, health/readiness — are intended to remain

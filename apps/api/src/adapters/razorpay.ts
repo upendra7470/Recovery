@@ -89,6 +89,7 @@ export class RazorpayAdapter implements PaymentProviderAdapter {
       errorStep: optionalString(payment, 'error_step'),
       errorReason: optionalString(payment, 'error_reason'),
       providerAccountId: envelope.accountId,
+      subscriptionId: optionalString(payment, 'subscription_id'),
       paymentCreatedAt: optionalUnixSecondsDate(payment['created_at']),
       occurredAt: resolveOccurredAt(envelope, payment),
     };

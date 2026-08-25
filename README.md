@@ -7,11 +7,12 @@ understand where revenue is leaking, decide how to recover it safely, execute
 approved recovery actions, verify outcomes, and measure the revenue actually
 recovered.
 
-> **Status: Phase 2 — Payment event ingestion (Razorpay webhooks).**
-> RecoveryOS ingests Razorpay payment events through verified webhooks and
-> stores them idempotently. It does **not yet use AI/LLMs**, does **not perform
-> any recovery actions**, and all monetary figures shown in the dashboard are
-> zero by design because no decision/recovery pipeline exists yet.
+> **Status: Phase 3 — Revenue leakage detection engine.**
+> RecoveryOS ingests Razorpay payment events through verified webhooks and runs
+> a deterministic detection engine over them to persist recovery opportunities.
+> It does **not yet use AI/LLMs**, does **not perform any recovery actions**, and
+> never invents monetary figures — every amount is derived from stored payment
+> events in the provider's minor units.
 
 ---
 
@@ -27,7 +28,7 @@ manual follow-ups or blunt retry loops. RecoveryOS is being built to provide:
 - **Execution** – orchestrated recovery actions (retries, payment links, voice).
 - **Verification & measurement** – verified outcomes and true recovered-revenue reporting.
 
-## 2. Current phase scope (Phase 1 + 2)
+## 2. Current phase scope (Phase 1 + 2 + 3)
 
 Phase 1 delivered the application foundation:
 
@@ -54,10 +55,23 @@ Phase 2 adds reliable payment event ingestion:
 | Persistence | `PaymentEvent` model retaining raw payload + normalized data for audit |
 | Idempotency | Unique `(provider, provider_event_id)` constraint; duplicates return 200 |
 
+Phase 3 adds the deterministic revenue leakage detection engine (no LLMs):
+
+| Area | Delivered |
+| --- | --- |
+| Detection rules | `FailedPaymentRule`, `SubscriptionPaymentFailedRule`, `CheckoutDropoffRule` — pure, side-effect-free, mutually exclusive per event |
+| Correlation | Failed/authorized payments are checked against related captured/failed events inside a configurable window (`DETECTION_WINDOW_HOURS`) before an opportunity is created — a successful retry suppresses the finding |
+| Opportunities | `RecoveryOpportunity` model with `OPEN → RECOVERED` lifecycle, evidence JSON, expiry for drop-offs |
+| Idempotency | Unique `(source_event_id, type)` constraint; concurrent detections resolve to one row |
+| Tenant isolation | Merchant/account attribution copied **only** from the stored source event |
+| Resolution | A captured payment correlated by payment/order id marks open opportunities `RECOVERED` with the recovery event recorded — never fabricated |
+| Read API | `GET /opportunities`, `GET /opportunities/overview`, `GET /opportunities/:id` (merchantId-scoped) |
+| Dashboard | Recovery Cases page + Overview stat cards now render real detected data |
+
 Explicitly **not** implemented yet: AI decisions, recovery orchestration,
 analytics dashboards, automated retry strategies, synthetic data, simulation,
-risk engine, policies, recovery actions, outcome verification, ledger, merchant
-memory, voice recovery, authentication.
+policies, recovery actions (beyond passive recovery verification), outcome
+verification workflows, ledger, merchant memory, voice recovery, authentication.
 
 ## 3. Architecture
 
@@ -77,11 +91,12 @@ a dedicated process keeps those concerns decoupled from the frontend from day on
 Layering inside the API:
 
 ```
-routes/        HTTP surface (health, readiness, Razorpay webhook)
+routes/        HTTP surface (health, readiness, Razorpay webhook, opportunities)
 services/      business rules + input validation orchestration
+detection/     deterministic leakage rules + detector (Phase 3, pure functions)
 adapters/      provider integrations (Razorpay signature/normalization)
 repositories/  persistence boundaries (no Prisma types leak upward)
-domain/        core types + store interfaces (Merchant, PaymentEvent, …)
+domain/        core types + store interfaces (Merchant, PaymentEvent, RecoveryOpportunity, …)
 lib/           logger, database contracts, error model, prisma client
 plugins/       centralized error handling, security headers
 config/        validated environment configuration
@@ -125,6 +140,7 @@ edit the generated files per environment. Never commit real `.env` files.
 | `LOG_LEVEL` | API | pino level: `fatal`…`trace` (+`silent`) |
 | `RAZORPAY_WEBHOOK_SECRET` | API | Secret used to verify `X-Razorpay-Signature` (optional at config level; the webhook endpoint fails closed when unset) |
 | `DEFAULT_TEST_PAYMENT_ACCOUNT_ID` | API | Optional PaymentAccount UUID used to link local/test webhooks that carry no recognizable provider account id |
+| `DETECTION_WINDOW_HOURS` | API | Correlation window (1–720, default 24) used when deciding whether a failure was later recovered or an authorization expired |
 | `NEXT_PUBLIC_APP_URL` | Web | Public URL of the dashboard |
 | `NEXT_PUBLIC_API_URL` | Web | Base URL of the API, called server-side for health |
 
@@ -167,6 +183,15 @@ payment account + merchant. Idempotency is enforced by a unique index on
 so the adapter derives a stable identity from the event type and payment id
 (e.g. `payment.captured:pay_123`). Amounts are stored in the provider's minor
 unit (paise), exactly as Razorpay sends them.
+
+Phase 3 adds `recovery_opportunities`: one row per detected revenue leakage with
+type (`FAILED_PAYMENT`, `SUBSCRIPTION_PAYMENT_FAILED`, `CHECKOUT_DROPOFF`),
+status (`OPEN`, `RECOVERED`, `EXPIRED`, `DISMISSED` — Phase 3 only transitions
+`OPEN → RECOVERED`), amount at risk + currency copied from the source event,
+mandatory evidence JSON, detection/expiry/resolution timestamps and links to the
+source event (cascade) plus the recovery event that realized the revenue again.
+Idempotency: unique `(source_event_id, type)`; tenant scoping via indexed
+`merchant_id` / `payment_account_id` columns.
 
 ## 8. Running the application
 
@@ -229,6 +254,43 @@ The script derives its secret from `RAZORPAY_WEBHOOK_SECRET`
 (default `test_webhook_secret_123`) and targets `WEBHOOK_URL` or
 `http://localhost:4000/webhooks/razorpay`.
 
+## 8.2 Detection pipeline & opportunities API (Phase 3)
+
+After every ingested event the API runs the deterministic detection engine:
+
+| Incoming event | Engine behavior |
+| --- | --- |
+| `payment.failed` | Creates a `FAILED_PAYMENT` opportunity **unless** a captured payment for the same payment/order id already exists in the window |
+| `payment.failed` with `subscription_id` | Same check, categorized as `SUBSCRIPTION_PAYMENT_FAILED` instead |
+| `payment.authorized` never followed by capture/decline | Conservative `CHECKOUT_DROPOFF` opportunity that expires after `DETECTION_WINDOW_HOURS` |
+| `payment.captured` correlated to an open opportunity by payment/order id | Opportunity transitions to `RECOVERED` with the capture recorded as `recovery_event_id` |
+
+Detection failures never fail webhook ingestion — they are logged and skipped.
+Rules are pure functions: identical input always yields identical output.
+
+Read API:
+
+```text
+GET /opportunities?merchantId=&status=&type=&from=&to=   → { opportunities, total }
+GET /opportunities/overview?merchantId=                  → { openOpportunities, failedPayments, currencies[] }
+GET /opportunities/:id                                   → full detail incl. evidence + source-event summary
+```
+
+All queries honor the optional `merchantId` filter so responses never cross
+tenant boundaries. Raw webhook payloads and customer PII are never exposed —
+only detection evidence and non-sensitive source-event fields. Currency amounts
+are always returned in minor units and broken down per currency; currencies are
+never mixed into a single number.
+
+Local smoke test of the full flow:
+
+```bash
+node scripts/test-webhook.mjs payment.failed      # creates an OPEN opportunity
+node scripts/test-webhook.mjs                     # then:
+curl 'http://localhost:4000/opportunities'         # inspect detected cases
+curl 'http://localhost:4000/opportunities/overview'
+```
+
 ## 9. Tests
 
 ```bash
@@ -236,16 +298,21 @@ npm test            # all workspaces
 npm run test --workspace @recoveryos/api        # watch mode: add :watch
 ```
 
-Covered: env config validation (incl. optional webhook-secret conventions),
-`/health`, `/ready` (up, down, timeout, no-leak), centralized error handling
-(unknown errors, AppErrors, thrown ZodErrors, 404s, malformed JSON, production
-hardening), database connectivity checks, repository + service behavior with
-mocked persistence, web formatting utilities — and Phase 2 ingestion: Razorpay
-signature verification, payload validation/normalization, repository idempotency
-(P2002 → duplicate resolution), and webhook route status codes (`201` new,
-`200` duplicate/unsupported, `422` signature/payload/empty-body, `400`
-malformed JSON) exercised against an in-memory store that enforces the same
-uniqueness as PostgreSQL.
+Covered: env config validation (incl. optional webhook-secret conventions and
+`DETECTION_WINDOW_HOURS` bounds), `/health`, `/ready` (up, down, timeout,
+no-leak), centralized error handling (unknown errors, AppErrors, thrown
+ZodErrors, 404s, malformed JSON, production hardening), database connectivity
+checks, repository + service behavior with mocked persistence, web formatting
+utilities — Phase 2 ingestion: Razorpay signature verification, payload
+validation/normalization, repository idempotency (P2002 → duplicate resolution),
+and webhook route status codes (`201` new, `200` duplicate/unsupported, `422`
+signature/payload/empty-body, `400` malformed JSON) exercised against an
+in-memory store that enforces the same uniqueness as PostgreSQL — and Phase 3
+detection: rule-level suppression/correlation/expiry behavior, detector
+determinism and mutual exclusivity, opportunity creation/resolution with tenant
+isolation and idempotent replays, P2002 fallback in the opportunity repository,
+opportunities route filters/overview/detail responses, and the end-to-end
+webhook → detection → recovery flow through the real Fastify app.
 
 ## 10. Lint
 
@@ -276,17 +343,20 @@ npm run build       # compiles API to dist/ and builds the Next.js app
 
 No AI/LLM usage of any kind, no recovery strategies or actions, no payment
 retries or links, no voice recovery, no merchant memory, no anomaly detection,
-no synthetic transactions or simulation, no revenue-risk engine, no analytics,
-no authentication, and **no claimed recovered revenue** — every money figure
-renders as ₹0 honestly.
+no synthetic transactions or simulation, no analytics beyond the opportunity
+read API, no authentication, and no active recovery execution — `RECOVERED`
+status reflects only a customer-initiated successful retry observed in the
+event stream, never an action RecoveryOS took.
 
 ## 14. Planned future phases
 
 ~~Phase 2 Razorpay integration + webhook ingestion + normalization +
-idempotency~~ (delivered) · Phase 3 synthetic data + simulation + replay ·
-Phase 4 revenue risk engine · Phase 5 recovery intelligence/context/pattern
-engines + merchant memory · Phase 6 AI decision agent · Phase 7 policy/safety
-engine · Phase 8 recovery action orchestrator · Phase 9 outcome verification ·
-Phase 10 recovery ledger · Phase 11 adaptive merchant memory · Phase 12
-recovery modules · Phase 13 Hinglish voice recovery · Phase 14 full merchant
-dashboard. Details: [docs/architecture.md](docs/architecture.md).
+idempotency~~ (delivered) · ~~Phase 4 revenue risk engine~~ (delivered as the
+Phase 3 deterministic detection engine; AI-assisted risk scoring remains in the
+intelligence phases) · Phase 5 synthetic data + simulation + replay · Phase 6
+recovery intelligence/context/pattern engines + merchant memory · Phase 7 AI
+decision agent · Phase 8 policy/safety engine · Phase 9 recovery action
+orchestrator · Phase 10 outcome verification · Phase 11 recovery ledger ·
+Phase 12 adaptive merchant memory · Phase 13 recovery modules · Phase 14
+Hinglish voice recovery · Phase 15 full merchant dashboard. Details:
+[docs/architecture.md](docs/architecture.md).

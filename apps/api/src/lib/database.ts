@@ -1,4 +1,8 @@
-import type { PaymentAccountLookupStore, PaymentEventStore } from '../domain/payment-event.js';
+import type {
+  PaymentAccountLookupStore,
+  PaymentEventStore,
+} from '../domain/payment-event.js';
+import type { RecoveryOpportunityStore } from '../domain/recovery-opportunity.js';
 
 export type DbQueryTag = (strings: TemplateStringsArray, ...values: unknown[]) => Promise<unknown>;
 
@@ -14,6 +18,7 @@ export interface DbExecutor {
 export interface AppDatabase extends DbExecutor {
   readonly paymentEvent: PaymentEventStore;
   readonly paymentAccount: PaymentAccountLookupStore;
+  readonly recoveryOpportunity: RecoveryOpportunityStore;
 }
 
 export interface DbCheckOk {

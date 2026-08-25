@@ -90,6 +90,29 @@ export const PAYMENT_NETBANKING_PAYLOAD = {
   },
 };
 
+/** Successful retry on the same order as PAYMENT_FAILED_PAYLOAD — realizes the revenue again. */
+export const PAYMENT_CAPTURED_RETRY_PAYLOAD = {
+  event: 'payment.captured',
+  account_id: 'acc_123456',
+  created_at: 1690000100,
+  payload: {
+    payment: {
+      id: 'pay_RETRYok9876',
+      entity: 'payment',
+      amount: 100000,
+      currency: 'INR',
+      status: 'captured',
+      order_id: 'order_XYZabc999',
+      method: 'card',
+      email: 'declined@example.com',
+      contact: '+919812345678',
+      bank: null,
+      created_at: 1690000095,
+      captured_at: 1690000100,
+    },
+  },
+};
+
 export const UNSUPPORTED_EVENT_PAYLOAD = {
   event: 'refund.created',
   account_id: 'acc_123456',

@@ -27,6 +27,9 @@ export const envSchema = z.object({
   // the webhook endpoint fails closed with a server error when it is unset.
   RAZORPAY_WEBHOOK_SECRET: emptyToUndefined(z.string().min(1).optional()),
   DEFAULT_TEST_PAYMENT_ACCOUNT_ID: emptyToUndefined(z.string().uuid().optional()),
+  // Detection window (hours) used by revenue leakage rules to correlate
+  // failures with subsequent successful payments.
+  DETECTION_WINDOW_HOURS: z.coerce.number().int().min(1).max(720).default(24),
 });
 
 function emptyToUndefined<T extends z.ZodType>(schema: T) {

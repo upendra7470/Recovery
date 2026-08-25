@@ -31,6 +31,11 @@ export interface NormalizedPaymentEvent {
   errorReason: string | null;
   /** Provider account identifier from the webhook envelope, when present. */
   providerAccountId: string | null;
+  /**
+   * Subscription identifier for recurring payments, when the provider reports
+   * one on the payment entity. Null when the payment is not subscription-based.
+   */
+  subscriptionId: string | null;
   /** When the payment entity was created at the provider, if reported. */
   paymentCreatedAt: Date | null;
   /** Best-known occurrence time of the event itself. */

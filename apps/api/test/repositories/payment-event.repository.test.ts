@@ -28,6 +28,7 @@ function normalized(overrides: Partial<NormalizedPaymentEvent> = {}): Normalized
     errorStep: null,
     errorReason: null,
     providerAccountId: 'acc_123456',
+    subscriptionId: null,
     paymentCreatedAt: new Date(1690000000 * 1000),
     occurredAt: new Date(1690000100 * 1000),
     ...overrides,
@@ -71,6 +72,8 @@ function makeStores() {
     findByProviderEventId: vi.fn(
       async (): Promise<PaymentEventRow | null> => null
     ),
+    findById: vi.fn(async (): Promise<PaymentEventRow | null> => null),
+    findRelatedByOrderOrPayment: vi.fn(async (): Promise<PaymentEventRow[]> => []),
   };
   const accounts = {
     findActiveByExternalId: vi.fn(
@@ -129,6 +132,7 @@ describe('PaymentEventRepository', () => {
       errorSource: null,
       errorStep: null,
       errorReason: null,
+      subscriptionId: null,
       paymentCreatedAt: new Date(1690000000 * 1000).toISOString(),
       occurredAt: new Date(1690000100 * 1000).toISOString(),
     });

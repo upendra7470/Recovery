@@ -114,6 +114,7 @@ function toNormalizedData(normalized: NormalizedPaymentEvent): NormalizedPayment
     errorSource: normalized.errorSource,
     errorStep: normalized.errorStep,
     errorReason: normalized.errorReason,
+    subscriptionId: normalized.subscriptionId,
     paymentCreatedAt: normalized.paymentCreatedAt?.toISOString() ?? null,
     occurredAt: normalized.occurredAt.toISOString(),
   };

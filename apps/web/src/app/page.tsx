@@ -5,7 +5,8 @@ import { SectionCard } from '@/components/ui/section-card';
 import { StatCard } from '@/components/ui/stat-card';
 import { SystemStatusPill } from '@/components/ui/system-status-pill';
 import { getApiHealth } from '@/lib/api/status';
-import { formatInr, formatPercent } from '@/lib/format';
+import { getOpportunityOverview, type CurrencyBreakdown } from '@/lib/api/opportunities';
+import { formatMinorAmount, formatPercent } from '@/lib/format';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,8 +14,33 @@ export const metadata: Metadata = {
   title: 'Overview',
 };
 
+/** Sums a per-currency breakdown; INR is the primary ledger for display. */
+function primaryCurrencyTotals(currencies: CurrencyBreakdown[]): {
+  atRisk: number;
+  recovered: number;
+  extraCurrencies: string[];
+} {
+  const primary = currencies.find((entry) => entry.currency === 'INR');
+  const extras = currencies
+    .filter((entry) => entry.currency !== 'INR')
+    .map((entry) => entry.currency);
+  return {
+    atRisk: primary?.revenueAtRisk ?? 0,
+    recovered: primary?.recoveredAmount ?? 0,
+    extraCurrencies: extras,
+  };
+}
+
 export default async function OverviewPage() {
-  const apiHealth = await getApiHealth();
+  const [apiHealth, overview] = await Promise.all([getApiHealth(), getOpportunityOverview()]);
+
+  const totals =
+    overview !== null
+      ? primaryCurrencyTotals(overview.currencies)
+      : { atRisk: 0, recovered: 0, extraCurrencies: [] };
+  const closedTotal = totals.atRisk + totals.recovered;
+  const recoveryRate = closedTotal > 0 ? (totals.recovered / closedTotal) * 100 : 0;
+  const liveData = overview !== null;
 
   return (
     <>
@@ -27,27 +53,54 @@ export default async function OverviewPage() {
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label="Revenue at Risk"
-          value={formatInr(0)}
-          hint="No connected payment events yet."
+          value={formatMinorAmount(totals.atRisk, 'INR')}
+          hint={
+            !liveData
+              ? 'Detection service unreachable.'
+              : `${overview.openOpportunities} open opportunit${overview.openOpportunities === 1 ? 'y' : 'ies'} detected.`
+          }
           tone="risk"
         />
         <StatCard
           label="Recoverable Revenue"
-          value={formatInr(0)}
-          hint="No connected payment events yet."
+          value={formatMinorAmount(totals.atRisk, 'INR')}
+          hint={
+            !liveData
+              ? 'Detection service unreachable.'
+              : `Across ${overview.failedPayments} failed payment${overview.failedPayments === 1 ? '' : 's'}.`
+          }
         />
         <StatCard
           label="Recovered Revenue"
-          value={formatInr(0)}
+          value={formatMinorAmount(totals.recovered, 'INR')}
           tone="positive"
-          hint="No recovery actions have been executed."
+          hint={
+            !liveData
+              ? 'Detection service unreachable.'
+              : 'Verified against captured payment events.'
+          }
         />
         <StatCard
           label="Recovery Rate"
-          value={formatPercent(0)}
-          hint="Measured once recovery outcomes exist."
+          value={formatPercent(recoveryRate)}
+          hint={
+            !liveData || closedTotal === 0
+              ? 'Measured once recovery outcomes exist.'
+              : 'Recovered share of resolved opportunities.'
+          }
         />
       </div>
+
+      {totals.extraCurrencies.length > 0 && (
+        <p className="mt-3 text-xs text-slate-500">
+          Additional currencies detected:{' '}
+          {totals.extraCurrencies.map((currency) => {
+            const entry = overview?.currencies.find((c) => c.currency === currency);
+            return `${currency} ${formatMinorAmount(entry?.revenueAtRisk ?? 0, currency)}`;
+          }).join(', ')}
+          . Totals above show INR only.
+        </p>
+      )}
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
         <SectionCard
@@ -65,8 +118,8 @@ export default async function OverviewPage() {
           subtitle="Live payment success and failure signals"
         >
           <EmptyState
-            title="No payment events connected yet."
-            message="Connect a payment account to start monitoring revenue health. Payment ingestion is not part of Phase 1."
+            title="No payment health signals yet."
+            message="Connect a payment account and stream webhook events to start monitoring revenue health."
           />
         </SectionCard>
       </div>
