@@ -1,0 +1,97 @@
+import { describe, expect, it } from 'vitest';
+import { ConfigError, envSchema, loadEnv, parseEnv } from '../../src/config/env.js';
+
+const VALID_BASE = {
+  NODE_ENV: 'production',
+  DATABASE_URL: 'postgresql://user:pass@db.internal:5432/recoveryos',
+};
+
+describe('parseEnv', () => {
+  it('accepts a minimal valid environment and applies defaults', () => {
+    const env = parseEnv({ DATABASE_URL: 'postgresql://u:p@localhost:5432/db' });
+
+    expect(env.NODE_ENV).toBe('development');
+    expect(env.PORT).toBe(4000);
+    expect(env.HOST).toBe('0.0.0.0');
+    expect(env.LOG_LEVEL).toBe('info');
+    expect(env.DATABASE_URL).toBe('postgresql://u:p@localhost:5432/db');
+  });
+
+  it('coerces PORT from a string and keeps explicit values', () => {
+    const env = parseEnv({
+      ...VALID_BASE,
+      PORT: '8080',
+      HOST: '127.0.0.1',
+      LOG_LEVEL: 'debug',
+    });
+
+    expect(env.PORT).toBe(8080);
+    expect(env.HOST).toBe('127.0.0.1');
+    expect(env.LOG_LEVEL).toBe('debug');
+    expect(env.NODE_ENV).toBe('production');
+  });
+
+  it('rejects a missing DATABASE_URL', () => {
+    expect(() => parseEnv({})).toThrow(ConfigError);
+    try {
+      parseEnv({});
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigError);
+      const configError = error as ConfigError;
+      expect(configError.issues.join('\n')).toContain('DATABASE_URL');
+    }
+  });
+
+  it('rejects connection strings that are not PostgreSQL URLs', () => {
+    expect(() =>
+      parseEnv({ DATABASE_URL: 'mysql://user:pass@localhost:3306/db' })
+    ).toThrow(ConfigError);
+
+    expect(() => parseEnv({ DATABASE_URL: 'not-a-url' })).toThrow(ConfigError);
+  });
+
+  it('rejects an unknown NODE_ENV value', () => {
+    expect(() => parseEnv({ ...VALID_BASE, NODE_ENV: 'staging' })).toThrow(ConfigError);
+  });
+
+  it('rejects an unknown log level', () => {
+    expect(() => parseEnv({ ...VALID_BASE, LOG_LEVEL: 'loud' })).toThrow(ConfigError);
+  });
+
+  it('rejects a non-numeric port', () => {
+    expect(() => parseEnv({ ...VALID_BASE, PORT: 'four-thousand' })).toThrow(ConfigError);
+  });
+
+  it('rejects an out-of-range port', () => {
+    expect(() => parseEnv({ ...VALID_BASE, PORT: '70000' })).toThrow(ConfigError);
+  });
+});
+
+describe('loadEnv', () => {
+  it('defaults to process.env as the source', () => {
+    const original = process.env.DATABASE_URL;
+    process.env.DATABASE_URL = 'postgresql://u:p@localhost:5432/from-process-env';
+
+    try {
+      const env = loadEnv();
+      expect(env.DATABASE_URL).toBe('postgresql://u:p@localhost:5432/from-process-env');
+    } finally {
+      if (original === undefined) {
+        delete process.env.DATABASE_URL;
+      } else {
+        process.env.DATABASE_URL = original;
+      }
+    }
+  });
+});
+
+describe('envSchema', () => {
+  it('allows every documented log level plus silent for tests', () => {
+    for (const level of ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']) {
+      expect(() =>
+        envSchema.parse({ ...VALID_BASE, LOG_LEVEL: level })
+      ).not.toThrow();
+    }
+  });
+});

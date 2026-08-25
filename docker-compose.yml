@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: recoveryos-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: recoveryos
+      POSTGRES_PASSWORD: recoveryos_dev
+      POSTGRES_DB: recoveryos
+    ports:
+      - "5432:5432"
+    volumes:
+      - recoveryos_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U recoveryos -d recoveryos"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  recoveryos_pgdata:

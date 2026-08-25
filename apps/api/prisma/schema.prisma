@@ -1,0 +1,49 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum PaymentProvider {
+  razorpay
+}
+
+enum PaymentAccountEnvironment {
+  test
+  production
+}
+
+enum PaymentAccountStatus {
+  active
+  inactive
+}
+
+model Merchant {
+  id              String           @id @default(uuid()) @db.Uuid
+  name            String
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  paymentAccounts PaymentAccount[]
+
+  @@map("merchants")
+}
+
+model PaymentAccount {
+  id                String                     @id @default(uuid()) @db.Uuid
+  merchantId        String                     @db.Uuid
+  provider          PaymentProvider
+  environment       PaymentAccountEnvironment
+  status            PaymentAccountStatus       @default(active)
+  displayName       String?
+  externalAccountId String?
+  createdAt         DateTime                   @default(now())
+  updatedAt         DateTime                   @updatedAt
+  merchant          Merchant                   @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, environment, externalAccountId])
+  @@index([merchantId])
+  @@map("payment_accounts")
+}
