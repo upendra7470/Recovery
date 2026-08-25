@@ -10,21 +10,6 @@ jobs:
   api:
     runs-on: ubuntu-latest
 
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: recoveryos
-          POSTGRES_PASSWORD: recoveryos_dev
-          POSTGRES_DB: recoveryos
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready -U recoveryos -d recoveryos
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
     env:
       NODE_ENV: test
       DATABASE_URL: postgresql://recoveryos:recoveryos_dev@localhost:5432/recoveryos?schema=public
@@ -40,7 +25,26 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Start PostgreSQL
+        run: |
+          docker run -d --name recoveryos-db \
+            -e POSTGRES_USER=recoveryos \
+            -e POSTGRES_PASSWORD=recoveryos_dev \
+            -e POSTGRES_DB=recoveryos \
+            -p 5432:5432 \
+            postgres:16-alpine
+
+      - name: Wait for PostgreSQL
+        run: |
+          for i in $(seq 1 30); do
+            docker exec recoveryos-db pg_isready -U recoveryos && break || sleep 1
+          done
+
       - run: npm ci
+
+      - name: Create test database schema
+        run: npx prisma migrate deploy
+        working-directory: apps/api
 
       - name: Lint
         run: npm run lint -w @recoveryos/api
