@@ -1,8 +1,8 @@
 # RecoveryOS Architecture
 
-This document describes the Phase 1 foundation and the intended target
-architecture that later phases will grow into. Nothing described as "future" is
-implemented yet.
+This document describes the Phase 1 foundation, the Phase 2 payment event
+ingestion pipeline, and the intended target architecture that later phases will
+grow into. Nothing described as "future" is implemented yet.
 
 ## 1. System context (target state)
 
@@ -88,16 +88,71 @@ the browser, CORS will be added with an explicit allow-list — never a wildcard
 
 ```
 routes → services → repositories → Prisma/PostgreSQL
-          ↑ validates via Zod        ↑ maps rows → domain types
+            ↑ adapters (provider integrations)
+              ↑ validates via Zod        ↑ maps rows → domain types
 ```
 
 - Routes only parse HTTP and delegate; they never touch Prisma.
 - Services own business rules and input validation (`parseWith(schema, input)`).
-- Repositories depend on narrow store interfaces (`MerchantStore`), not the full
-  Prisma client — this keeps them unit-testable and ORM-swappable.
+- Provider-specific logic (signature schemes, payload dialects) lives behind
+  the `PaymentProviderAdapter` interface in `adapters/`, never inside routes.
+- Repositories depend on narrow store interfaces (`PaymentEventStore`,
+  `PaymentAccountLookupStore`), not the full Prisma client — this keeps them
+  unit-testable and ORM-swappable. The only Prisma-touched code is
+  `repositories/prisma-stores.ts` and `lib/prisma.ts`.
 - Domain types are plain TypeScript; persistence shapes do not leak outward.
 - Configuration is parsed once at startup by Zod (`config/env.ts`) and fails
   fast on invalid values; nothing reads `process.env` ad hoc inside features.
+
+## 5.1 Payment event ingestion (Phase 2)
+
+```
+Razorpay webhook
+      │
+      ▼
+POST /webhooks/razorpay                routes/webhooks.ts
+      │  raw-body capture (scoped content-type parser)
+      ▼
+HMAC-SHA256 signature verification     adapters/razorpay.ts (timing-safe)
+      │  rejects invalid / modified / missing signatures → 422
+      ▼
+Payload validation                     envelope + payment entity structure
+      │  malformed payloads → 422; unsupported events acknowledged → 200
+      ▼
+Event normalization                    provider-agnostic NormalizedPaymentEvent
+      ▼
+Account/merchant resolution            envelope account_id, else configured
+      │                                test account; may stay unlinked
+      ▼
+Idempotent persistence                 PaymentEventRepository
+      │  unique (provider, provider_event_id); P2002 races resolve to the
+      │  existing row and report status "duplicate"
+      ▼
+Deterministic response                 201 new · 200 duplicate/unsupported
+                                       422 invalid signature/payload · 400 bad JSON
+```
+
+Key decisions:
+
+- **Raw body fidelity.** The exact request bytes are captured in a parser that
+  Fastify scopes to the webhook plugin's encapsulation context, so JSON parsing
+  behavior on every other route stays untouched.
+- **Derived idempotency identity.** Razorpay webhooks do not carry a dedicated
+  event id, so the adapter derives a stable one from the event type + provider
+  payment id (`payment.captured:pay_123`). The database's composite unique
+  index is the source of truth — no in-memory cache participates.
+- **Amounts are preserved** in the provider's minor unit (paise) exactly as
+  Razorpay sends them; normalization never converts currency values.
+- **Audit first.** Each row keeps the raw payload verbatim plus a JSON-safe
+  normalized projection (ISO timestamps), so events can be reprocessed by
+  future phases without re-fetching from the provider.
+- **Fail closed on missing config.** The webhook secret is optional at the env
+  layer (preserving existing deployments/tests); ingestion returns a server
+  error rather than processing unverified events when it is unset.
+
+Supported events: `payment.authorized`, `payment.captured`,
+`payment.failed`. Other Razorpay events are acknowledged with
+`status: "unsupported"` and are not persisted.
 
 ## 6. Logging & observability
 
@@ -122,7 +177,7 @@ logging flows through one factory (`lib/logger.ts`).
 
 ## 8. Data model evolution
 
-Phase 1 ships only identity foundations:
+Phase 1 shipped the identity foundations:
 
 - `merchants(id uuid pk, name text, created_at, updated_at)`
 - `payment_accounts(id uuid pk, merchant_id fk→merchants cascade, provider enum
@@ -131,12 +186,18 @@ Phase 1 ships only identity foundations:
   `(provider, environment, external_account_id)` to prepare idempotent provider
   account registration.
 
-Later phases will add (non-exhaustive): raw + normalized event tables with
-idempotency keys (P2), simulation/replay datasets (P3), risk assessments (P4),
-decisions + rationale + policy evaluations (P5–P7), recovery actions + attempts
-(P8), outcome verifications (P9), append-only recovery ledger entries (P10),
-merchant memory embeddings/summaries (P11). Each lands as its own migration;
-enums evolve additively.
+Phase 2 added `payment_events` (migration
+`20260825133130_add_payment_events`): raw + normalized webhook event storage
+with `signature_verified`, `processing_status` enum [pending|processed|
+duplicate|unsupported|failed], attempt counters, failure reason, and optional
+`SET NULL` relations to payment account and merchant. Uniqueness on
+`(provider, provider_event_id)` enforces idempotent ingestion at the database.
+
+Later phases will add (non-exhaustive): simulation/replay datasets (P3), risk
+assessments (P4), decisions + rationale + policy evaluations (P5–P7), recovery
+actions + attempts (P8), outcome verifications (P9), append-only recovery
+ledger entries (P10), merchant memory embeddings/summaries (P11). Each lands as
+its own migration; enums evolve additively.
 
 ## 9. Testing strategy
 
@@ -148,6 +209,9 @@ Vitest, node environment, no live DB required for CI determinism:
 - Error handling: mapping table of error classes → status/envelope, production
   masking, framework errors (bad JSON, 404).
 - Persistence boundary: repository/service behavior against typed mock stores.
+- Ingestion: adapter unit tests (signatures, validation, normalization),
+  repository idempotency tests (unique-violation resolution), and route tests
+  against an in-memory store enforcing the same unique constraint as Postgres.
 - Web: pure formatting logic (`formatInr`, `formatPercent`).
 
 Integration-style tests against a live PostgreSQL run naturally during local
@@ -158,7 +222,7 @@ first data-bearing phase.
 
 | Phase | New capability | Where it plugs in |
 | --- | --- | --- |
-| 2 | Razorpay webhooks | new `routes/` module + `services/ingestion` + idempotency repo |
+| 2 ✅ | Razorpay webhooks | `routes/webhooks.ts` + `adapters/razorpay.ts` + `PaymentEventRepository` |
 | 3 | Simulation/replay | `services/simulation` reusing event normalization |
 | 4 | Risk engine | `domain/risk` + `services/risk`; scheduled/batch entrypoint |
 | 5 | Context/pattern/memory | `services/intelligence/*`, new repos |

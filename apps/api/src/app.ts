@@ -1,22 +1,36 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import { loadEnv, type AppEnv } from './config/env.js';
-import type { DbExecutor } from './lib/database.js';
+import type { AppDatabase } from './lib/database.js';
 import { createLoggerOptions } from './lib/logger.js';
-import { createPrismaClient } from './lib/prisma.js';
+import { createAppDatabase, createPrismaClient, type PrismaClient } from './lib/prisma.js';
 import { registerErrorHandler } from './plugins/error-handler.js';
 import { registerSecurityHeaders } from './plugins/security-headers.js';
 import { healthRoutes } from './routes/health.js';
 import { readyRoutes } from './routes/ready.js';
+import { webhookRoutes } from './routes/webhooks.js';
 
 export interface BuildAppOptions {
   env?: AppEnv;
-  db?: DbExecutor;
+  /** Inject a database implementation (tests); defaults to a real Prisma client. */
+  db?: AppDatabase;
 }
 
 export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance> {
   const env = options.env ?? loadEnv();
-  const db = options.db ?? createPrismaClient(env.DATABASE_URL);
+
+  let db: AppDatabase;
+  let closeDatabase: () => Promise<void>;
+  if (options.db) {
+    db = options.db;
+    closeDatabase = async () => {};
+  } else {
+    const client: PrismaClient = createPrismaClient(env.DATABASE_URL);
+    db = createAppDatabase(client);
+    closeDatabase = async () => {
+      await client.$disconnect();
+    };
+  }
 
   const app = Fastify({
     logger: createLoggerOptions(env),
@@ -36,11 +50,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   registerErrorHandler(app);
   await app.register(healthRoutes);
   await app.register(readyRoutes);
+  await app.register(webhookRoutes);
 
   app.addHook('onClose', async () => {
-    if (typeof db.$disconnect === 'function') {
-      await db.$disconnect();
-    }
+    await closeDatabase();
   });
 
   return app;

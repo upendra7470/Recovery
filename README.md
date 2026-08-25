@@ -7,10 +7,11 @@ understand where revenue is leaking, decide how to recover it safely, execute
 approved recovery actions, verify outcomes, and measure the revenue actually
 recovered.
 
-> **Status: Phase 1 — Foundation.**
-> RecoveryOS does **not yet connect to Razorpay**, does **not use AI/LLMs**, and
-> does **not perform any recovery actions**. All monetary figures shown in the
-> dashboard are zero by design because no payment events exist yet.
+> **Status: Phase 2 — Payment event ingestion (Razorpay webhooks).**
+> RecoveryOS ingests Razorpay payment events through verified webhooks and
+> stores them idempotently. It does **not yet use AI/LLMs**, does **not perform
+> any recovery actions**, and all monetary figures shown in the dashboard are
+> zero by design because no decision/recovery pipeline exists yet.
 
 ---
 
@@ -26,9 +27,9 @@ manual follow-ups or blunt retry loops. RecoveryOS is being built to provide:
 - **Execution** – orchestrated recovery actions (retries, payment links, voice).
 - **Verification & measurement** – verified outcomes and true recovered-revenue reporting.
 
-## 2. Current phase scope (Phase 1)
+## 2. Current phase scope (Phase 1 + 2)
 
-Phase 1 delivers only the application foundation:
+Phase 1 delivered the application foundation:
 
 | Area | Delivered |
 | --- | --- |
@@ -43,10 +44,20 @@ Phase 1 delivers only the application foundation:
 | Quality | ESLint (type-aware), TypeScript strict mode, Prettier |
 | Infra | Docker Compose for PostgreSQL (optional), local Postgres supported |
 
-Explicitly **not** in this phase: Razorpay integration, webhooks, event ingestion,
-idempotency, synthetic data, simulation, risk engine, AI decisions, policies,
-recovery actions, outcome verification, ledger, merchant memory, voice recovery,
-authentication.
+Phase 2 adds reliable payment event ingestion:
+
+| Area | Delivered |
+| --- | --- |
+| Webhook endpoint | `POST /webhooks/razorpay` with raw-body HMAC-SHA256 verification |
+| Provider adapter | `RazorpayAdapter` behind a generic `PaymentProviderAdapter` interface |
+| Normalization | Razorpay payloads normalized into a provider-agnostic shape |
+| Persistence | `PaymentEvent` model retaining raw payload + normalized data for audit |
+| Idempotency | Unique `(provider, provider_event_id)` constraint; duplicates return 200 |
+
+Explicitly **not** implemented yet: AI decisions, recovery orchestration,
+analytics dashboards, automated retry strategies, synthetic data, simulation,
+risk engine, policies, recovery actions, outcome verification, ledger, merchant
+memory, voice recovery, authentication.
 
 ## 3. Architecture
 
@@ -66,11 +77,12 @@ a dedicated process keeps those concerns decoupled from the frontend from day on
 Layering inside the API:
 
 ```
-routes/        HTTP surface (health, readiness today; events/payments later)
+routes/        HTTP surface (health, readiness, Razorpay webhook)
 services/      business rules + input validation orchestration
+adapters/      provider integrations (Razorpay signature/normalization)
 repositories/  persistence boundaries (no Prisma types leak upward)
-domain/        core types + schemas (Merchant today; more later)
-lib/           logger, database checks, error model, prisma client
+domain/        core types + store interfaces (Merchant, PaymentEvent, …)
+lib/           logger, database contracts, error model, prisma client
 plugins/       centralized error handling, security headers
 config/        validated environment configuration
 ```
@@ -111,6 +123,8 @@ edit the generated files per environment. Never commit real `.env` files.
 | `API_HOST` | API | Interface the API binds to |
 | `API_PORT` | API | Port the API listens on (default 4000) |
 | `LOG_LEVEL` | API | pino level: `fatal`…`trace` (+`silent`) |
+| `RAZORPAY_WEBHOOK_SECRET` | API | Secret used to verify `X-Razorpay-Signature` (optional at config level; the webhook endpoint fails closed when unset) |
+| `DEFAULT_TEST_PAYMENT_ACCOUNT_ID` | API | Optional PaymentAccount UUID used to link local/test webhooks that carry no recognizable provider account id |
 | `NEXT_PUBLIC_APP_URL` | Web | Public URL of the dashboard |
 | `NEXT_PUBLIC_API_URL` | Web | Base URL of the API, called server-side for health |
 
@@ -145,6 +159,15 @@ Phase 1 schema: `merchants` (id, name, createdAt, updatedAt) and
 environment `test|production`, status `active|inactive`, optional display name and
 external account id — **no credentials or secrets are ever stored**).
 
+Phase 2 adds `payment_events`: one row per ingested webhook event with the raw
+payload (`jsonb`), a JSON-safe normalized projection, signature-verification
+state, processing status/attempts/timestamps and optional links to the resolved
+payment account + merchant. Idempotency is enforced by a unique index on
+`(provider, provider_event_id)` — Razorpay payloads carry no dedicated event id,
+so the adapter derives a stable identity from the event type and payment id
+(e.g. `payment.captured:pay_123`). Amounts are stored in the provider's minor
+unit (paise), exactly as Razorpay sends them.
+
 ## 8. Running the application
 
 ```bash
@@ -169,6 +192,43 @@ curl http://localhost:4000/ready    # readiness → 200 when DB is reachable, 50
 open http://localhost:3000          # dashboard shell
 ```
 
+## 8.1 Webhook endpoint (Phase 2)
+
+```text
+POST /webhooks/razorpay
+```
+
+| Scenario | Response |
+| --- | --- |
+| Valid, previously unseen event | `201` + `{received, eventId, status: "processed", …}` |
+| Redelivery of the same event | `200` + `status: "duplicate"` (no second row) |
+| Supported but not-yet-handled Razorpay event | `200` + `status: "unsupported"` |
+| Invalid / modified / missing signature | `422` validation envelope |
+| Malformed payload (missing event/payment entity) | `422` validation envelope |
+| Empty body | `422` validation envelope |
+| Malformed JSON | `400` client error envelope |
+
+Signature verification uses HMAC-SHA256 over the **exact raw request bytes**
+(captured before JSON parsing) compared timing-safely against
+`X-Razorpay-Signature`. Supported events today: `payment.authorized`,
+`payment.captured`, `payment.failed`. Unsupported events are acknowledged
+(`200`) without being persisted.
+
+Local testing against a running API:
+
+```bash
+node scripts/test-webhook.mjs payment.captured     # or payment.authorized/failed
+node scripts/test-webhook.mjs duplicate            # 201 → 200 idempotent replay
+node scripts/test-webhook.mjs invalid-signature    # expect 422
+node scripts/test-webhook.mjs modified-payload     # expect 422
+node scripts/test-webhook.mjs unsupported          # expect 200
+node scripts/test-webhook.mjs malformed            # expect 422
+```
+
+The script derives its secret from `RAZORPAY_WEBHOOK_SECRET`
+(default `test_webhook_secret_123`) and targets `WEBHOOK_URL` or
+`http://localhost:4000/webhooks/razorpay`.
+
 ## 9. Tests
 
 ```bash
@@ -176,11 +236,16 @@ npm test            # all workspaces
 npm run test --workspace @recoveryos/api        # watch mode: add :watch
 ```
 
-Covered: env config validation, `/health`, `/ready` (up, down, timeout,
-no-leak), centralized error handling (unknown errors, AppErrors, thrown
-ZodErrors, 404s, malformed JSON, production hardening), database connectivity
-checks (success/failure/timeout), repository + service behavior with mocked
-persistence, and web formatting utilities.
+Covered: env config validation (incl. optional webhook-secret conventions),
+`/health`, `/ready` (up, down, timeout, no-leak), centralized error handling
+(unknown errors, AppErrors, thrown ZodErrors, 404s, malformed JSON, production
+hardening), database connectivity checks, repository + service behavior with
+mocked persistence, web formatting utilities — and Phase 2 ingestion: Razorpay
+signature verification, payload validation/normalization, repository idempotency
+(P2002 → duplicate resolution), and webhook route status codes (`201` new,
+`200` duplicate/unsupported, `422` signature/payload/empty-body, `400`
+malformed JSON) exercised against an in-memory store that enforces the same
+uniqueness as PostgreSQL.
 
 ## 10. Lint
 
@@ -209,19 +274,19 @@ npm run build       # compiles API to dist/ and builds the Next.js app
 
 ## 13. What is NOT implemented yet
 
-No Razorpay connectivity, no webhook/event ingestion, no idempotency layer, no
-synthetic transactions or simulation, no revenue-risk engine, no AI/LLM usage of
-any kind, no recovery strategies or actions, no payment retries or links, no
-voice recovery, no merchant memory, no anomaly detection, no authentication, and
-**no claimed recovered revenue** — every money figure renders as ₹0 honestly.
+No AI/LLM usage of any kind, no recovery strategies or actions, no payment
+retries or links, no voice recovery, no merchant memory, no anomaly detection,
+no synthetic transactions or simulation, no revenue-risk engine, no analytics,
+no authentication, and **no claimed recovered revenue** — every money figure
+renders as ₹0 honestly.
 
 ## 14. Planned future phases
 
-Phase 2 Razorpay integration + webhook ingestion + normalization + idempotency ·
-Phase 3 synthetic data + simulation + replay · Phase 4 revenue risk engine ·
-Phase 5 recovery intelligence/context/pattern engines + merchant memory ·
-Phase 6 AI decision agent · Phase 7 policy/safety engine · Phase 8 recovery
-action orchestrator · Phase 9 outcome verification · Phase 10 recovery ledger ·
-Phase 11 adaptive merchant memory · Phase 12 recovery modules · Phase 13
-Hinglish voice recovery · Phase 14 full merchant dashboard. Details:
-[docs/architecture.md](docs/architecture.md).
+~~Phase 2 Razorpay integration + webhook ingestion + normalization +
+idempotency~~ (delivered) · Phase 3 synthetic data + simulation + replay ·
+Phase 4 revenue risk engine · Phase 5 recovery intelligence/context/pattern
+engines + merchant memory · Phase 6 AI decision agent · Phase 7 policy/safety
+engine · Phase 8 recovery action orchestrator · Phase 9 outcome verification ·
+Phase 10 recovery ledger · Phase 11 adaptive merchant memory · Phase 12
+recovery modules · Phase 13 Hinglish voice recovery · Phase 14 full merchant
+dashboard. Details: [docs/architecture.md](docs/architecture.md).

@@ -21,29 +21,76 @@ enum PaymentAccountStatus {
   inactive
 }
 
+/// Processing lifecycle of an ingested webhook event.
+/// Mirrors PaymentEventProcessingStatus in src/domain/payment-event.ts.
+enum ProcessingStatus {
+  pending
+  processed
+  duplicate
+  unsupported
+  failed
+}
+
 model Merchant {
   id              String           @id @default(uuid()) @db.Uuid
   name            String
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
   paymentAccounts PaymentAccount[]
+  paymentEvents   PaymentEvent[]
 
   @@map("merchants")
 }
 
 model PaymentAccount {
-  id                String                     @id @default(uuid()) @db.Uuid
-  merchantId        String                     @db.Uuid
+  id                String                    @id @default(uuid()) @db.Uuid
+  merchantId        String                    @db.Uuid
   provider          PaymentProvider
   environment       PaymentAccountEnvironment
-  status            PaymentAccountStatus       @default(active)
+  status            PaymentAccountStatus      @default(active)
   displayName       String?
   externalAccountId String?
-  createdAt         DateTime                   @default(now())
-  updatedAt         DateTime                   @updatedAt
-  merchant          Merchant                   @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+  merchant          Merchant                  @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  paymentEvents     PaymentEvent[]
 
   @@unique([provider, environment, externalAccountId])
   @@index([merchantId])
   @@map("payment_accounts")
+}
+
+model PaymentEvent {
+  id                 String           @id @default(uuid()) @db.Uuid
+  paymentAccountId   String?          @db.Uuid
+  merchantId         String?          @db.Uuid
+  provider           PaymentProvider
+  providerEventId    String
+  eventType          String
+  providerPaymentId  String?
+  providerOrderId    String?
+  eventCreatedAt     DateTime
+  receivedAt         DateTime         @default(now())
+  payload            Json
+  normalizedData     Json?
+  signatureVerified  Boolean          @default(false)
+  processingStatus   ProcessingStatus @default(pending)
+  processingAttempts Int              @default(0)
+  processedAt        DateTime?
+  failureReason      String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  paymentAccount     PaymentAccount?  @relation(fields: [paymentAccountId], references: [id], onDelete: SetNull)
+  merchant           Merchant?        @relation(fields: [merchantId], references: [id], onDelete: SetNull)
+
+  /// Idempotency: one record per provider event identity. Razorpay payloads do
+  /// not carry a dedicated event id, so the adapter derives a stable identity
+  /// from the event type + provider payment id (see RazorpayAdapter).
+  @@unique([provider, providerEventId])
+  @@index([paymentAccountId])
+  @@index([merchantId])
+  @@index([providerPaymentId])
+  @@index([processingStatus])
+  @@index([receivedAt])
+  @@map("payment_events")
 }

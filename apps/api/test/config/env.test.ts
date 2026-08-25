@@ -66,6 +66,35 @@ describe('parseEnv', () => {
   it('rejects an out-of-range port', () => {
     expect(() => parseEnv({ ...VALID_BASE, PORT: '70000' })).toThrow(ConfigError);
   });
+
+  it('treats RAZORPAY_WEBHOOK_SECRET as optional to preserve existing environments', () => {
+    const env = parseEnv({ DATABASE_URL: 'postgresql://u:p@localhost:5432/db' });
+    expect(env.RAZORPAY_WEBHOOK_SECRET).toBeUndefined();
+  });
+
+  it('keeps a provided RAZORPAY_WEBHOOK_SECRET', () => {
+    const env = parseEnv({
+      ...VALID_BASE,
+      RAZORPAY_WEBHOOK_SECRET: 'whsec_abc',
+    });
+    expect(env.RAZORPAY_WEBHOOK_SECRET).toBe('whsec_abc');
+  });
+
+  it('normalizes blank optional values to undefined', () => {
+    const env = parseEnv({
+      ...VALID_BASE,
+      DEFAULT_TEST_PAYMENT_ACCOUNT_ID: '',
+      RAZORPAY_WEBHOOK_SECRET: '   ',
+    });
+    expect(env.DEFAULT_TEST_PAYMENT_ACCOUNT_ID).toBeUndefined();
+    expect(env.RAZORPAY_WEBHOOK_SECRET).toBeUndefined();
+  });
+
+  it('rejects a non-uuid DEFAULT_TEST_PAYMENT_ACCOUNT_ID', () => {
+    expect(() =>
+      parseEnv({ ...VALID_BASE, DEFAULT_TEST_PAYMENT_ACCOUNT_ID: 'not-a-uuid' })
+    ).toThrow(ConfigError);
+  });
 });
 
 describe('loadEnv', () => {

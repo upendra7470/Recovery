@@ -1,5 +1,10 @@
 import { Prisma, PrismaClient } from '@prisma/client';
+import type { AppDatabase } from './database.js';
 import type { Logger } from 'pino';
+import {
+  createPrismaPaymentAccountLookupStore,
+  createPrismaPaymentEventStore,
+} from '../repositories/prisma-stores.js';
 
 export type { PrismaClient };
 
@@ -22,4 +27,17 @@ export function createPrismaClient(databaseUrl: string, logger?: Logger): Prisma
   }
 
   return client;
+}
+
+/**
+ * Builds the full AppDatabase contract from a real Prisma client: raw SQL
+ * access plus the domain store boundaries used by feature code.
+ */
+export function createAppDatabase(client: PrismaClient): AppDatabase {
+  return {
+    $queryRaw: (strings, ...values) => client.$queryRaw(strings, ...values),
+    $disconnect: () => client.$disconnect(),
+    paymentEvent: createPrismaPaymentEventStore(client),
+    paymentAccount: createPrismaPaymentAccountLookupStore(client),
+  };
 }

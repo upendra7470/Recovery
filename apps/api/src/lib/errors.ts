@@ -43,6 +43,12 @@ export class UnauthorizedError extends AppError {
   }
 }
 
+export class InternalError extends AppError {
+  constructor(message = 'An internal error occurred.', options?: { cause?: unknown }) {
+    super(500, 'INTERNAL_ERROR', message, { cause: options?.cause });
+  }
+}
+
 export function isAppError(error: unknown): error is AppError {
   return error instanceof AppError;
 }

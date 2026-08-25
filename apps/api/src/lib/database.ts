@@ -1,8 +1,19 @@
+import type { PaymentAccountLookupStore, PaymentEventStore } from '../domain/payment-event.js';
+
 export type DbQueryTag = (strings: TemplateStringsArray, ...values: unknown[]) => Promise<unknown>;
 
 export interface DbExecutor {
   $queryRaw: DbQueryTag;
   $disconnect?(): Promise<void>;
+}
+
+/**
+ * Full database contract decorated onto the Fastify instance: raw SQL access
+ * for health/readiness plus the typed store boundaries used by features.
+ */
+export interface AppDatabase extends DbExecutor {
+  readonly paymentEvent: PaymentEventStore;
+  readonly paymentAccount: PaymentAccountLookupStore;
 }
 
 export interface DbCheckOk {
