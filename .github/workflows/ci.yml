@@ -9,9 +9,6 @@ on:
 jobs:
   api:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/api
 
     services:
       postgres:
@@ -46,22 +43,19 @@ jobs:
       - run: npm ci
 
       - name: Lint
-        run: npm run lint
+        run: npm run lint -w @recoveryos/api
 
       - name: Typecheck
-        run: npm run typecheck
+        run: npm run typecheck -w @recoveryos/api
 
       - name: Test
-        run: npm run test
+        run: npm run test -w @recoveryos/api
 
       - name: Build
-        run: npm run build
+        run: npm run build -w @recoveryos/api
 
   web:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/web
 
     steps:
       - uses: actions/checkout@v4
@@ -74,13 +68,13 @@ jobs:
       - run: npm ci
 
       - name: Lint
-        run: npm run lint
+        run: npm run lint -w @recoveryos/web
 
       - name: Typecheck
-        run: npm run typecheck
+        run: npm run typecheck -w @recoveryos/web
 
       - name: Test
-        run: npm run test
+        run: npm run test -w @recoveryos/web
 
       - name: Build
-        run: npm run build
+        run: npm run build -w @recoveryos/web
