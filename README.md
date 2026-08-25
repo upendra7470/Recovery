@@ -7,11 +7,12 @@ understand where revenue is leaking, decide how to recover it safely, execute
 approved recovery actions, verify outcomes, and measure the revenue actually
 recovered.
 
-> **Status: Phase 3 — Revenue leakage detection engine.**
-> RecoveryOS ingests Razorpay payment events through verified webhooks and runs
-> a deterministic detection engine over them to persist recovery opportunities.
-> It does **not yet use AI/LLMs**, does **not perform any recovery actions**, and
-> never invents monetary figures — every amount is derived from stored payment
+> **Status: Phase 4 — Intelligent recovery decision engine (deterministic, no AI APIs).**
+> RecoveryOS ingests Razorpay payment events, detects revenue leakage, and now
+> scores every opportunity with a transparent decision engine: priority,
+> confidence and a recommended next step — each fully explainable. It does
+> **not use any LLM or paid AI API**, does **not execute any recovery actions**,
+> and never invents monetary figures — every amount derives from stored payment
 > events in the provider's minor units.
 
 ---
@@ -28,7 +29,7 @@ manual follow-ups or blunt retry loops. RecoveryOS is being built to provide:
 - **Execution** – orchestrated recovery actions (retries, payment links, voice).
 - **Verification & measurement** – verified outcomes and true recovered-revenue reporting.
 
-## 2. Current phase scope (Phase 1 + 2 + 3)
+## 2. Current phase scope (Phase 1–4)
 
 Phase 1 delivered the application foundation:
 
@@ -68,10 +69,24 @@ Phase 3 adds the deterministic revenue leakage detection engine (no LLMs):
 | Read API | `GET /opportunities`, `GET /opportunities/overview`, `GET /opportunities/:id` (merchantId-scoped) |
 | Dashboard | Recovery Cases page + Overview stat cards now render real detected data |
 
-Explicitly **not** implemented yet: AI decisions, recovery orchestration,
-analytics dashboards, automated retry strategies, synthetic data, simulation,
-policies, recovery actions (beyond passive recovery verification), outcome
-verification workflows, ledger, merchant memory, voice recovery, authentication.
+Phase 4 adds the deterministic, explainable recovery decision engine (still no
+LLMs — this is a heuristic model, not machine learning):
+
+| Area | Delivered |
+| --- | --- |
+| Decision engine | `decision/` pure engine (`v1`): transparent weighted factors → 0–100 score, five priority bands, separate 0–100 confidence, ordered safety rules → one of six controlled recommendations |
+| Failure classification | Deterministic mapping of provider failure codes to TRANSIENT / INSUFFICIENT_FUNDS / AUTHENTICATION / HARD_DECLINE / UNKNOWN; unmapped codes stay unknown and lower confidence instead of being guessed |
+| Explainability | Every decision stores structured factors (name, contribution, value, explanation), human-readable reasons and risk flags with per-flag explanations |
+| Safety-first | Hard declines → `DO_NOT_RETRY`; auth/funding failures → `CUSTOMER_ACTION_REQUIRED`; weak or conflicting evidence → `REVIEW`; closed opportunities → `NO_ACTION`. Phase 4 never executes payments or retries |
+| Persistence | `recovery_decisions` table: one row per (opportunity, engine version), upserted on re-evaluation; merchant attribution copied only from the opportunity |
+| Historical context | Outcome statistics per opportunity type feed the score only above a minimum sample size (20) — smaller samples are flagged `INSUFFICIENT_HISTORICAL_DATA` rather than producing invented rates |
+| Read API | `GET /opportunities/:id/decision` (lazy first evaluation + staleness-aware re-evaluation) and `GET /decisions/overview` metrics; the opportunities list now carries an additive `decision` summary |
+| Dashboard | Recovery Cases rows show priority/score/confidence/recommendation; new case detail page explains WHY (score breakdown, factors table, risks, engine version) |
+
+Explicitly **not** implemented yet: AI/LLM decisions, recovery orchestration,
+automated retries or payment actions, customer messaging, analytics beyond the
+read APIs, synthetic data, simulation, policies, outcome-verification workflows,
+ledger, merchant memory, voice recovery, authentication.
 
 ## 3. Architecture
 
@@ -91,12 +106,13 @@ a dedicated process keeps those concerns decoupled from the frontend from day on
 Layering inside the API:
 
 ```
-routes/        HTTP surface (health, readiness, Razorpay webhook, opportunities)
+routes/        HTTP surface (health, readiness, Razorpay webhook, opportunities, decisions)
 services/      business rules + input validation orchestration
 detection/     deterministic leakage rules + detector (Phase 3, pure functions)
+decision/      deterministic recovery decision engine (Phase 4, pure functions)
 adapters/      provider integrations (Razorpay signature/normalization)
 repositories/  persistence boundaries (no Prisma types leak upward)
-domain/        core types + store interfaces (Merchant, PaymentEvent, RecoveryOpportunity, …)
+domain/        core types + store interfaces (Merchant, PaymentEvent, RecoveryOpportunity, RecoveryDecision, …)
 lib/           logger, database contracts, error model, prisma client
 plugins/       centralized error handling, security headers
 config/        validated environment configuration
@@ -186,12 +202,20 @@ unit (paise), exactly as Razorpay sends them.
 
 Phase 3 adds `recovery_opportunities`: one row per detected revenue leakage with
 type (`FAILED_PAYMENT`, `SUBSCRIPTION_PAYMENT_FAILED`, `CHECKOUT_DROPOFF`),
-status (`OPEN`, `RECOVERED`, `EXPIRED`, `DISMISSED` — Phase 3 only transitions
-`OPEN → RECOVERED`), amount at risk + currency copied from the source event,
-mandatory evidence JSON, detection/expiry/resolution timestamps and links to the
-source event (cascade) plus the recovery event that realized the revenue again.
-Idempotency: unique `(source_event_id, type)`; tenant scoping via indexed
+status (`OPEN`, `RECOVERED`, `EXPIRED`, `DISMISSED` — only transitions
+`OPEN → RECOVERED` today), amount at risk + currency copied from the source
+event, mandatory evidence JSON, detection/expiry/resolution timestamps and links
+to the source event (cascade) plus the recovery event that realized the revenue
+again. Idempotency: unique `(source_event_id, type)`; tenant scoping via indexed
 `merchant_id` / `payment_account_id` columns.
+
+Phase 4 adds `recovery_decisions` (migration
+`20260825171037_add_recovery_decisions`): one row per (opportunity, engine
+version) storing score, priority enum, confidence, recommended-action enum,
+reasons/factors/risk-flags JSON, evaluated timestamp and a `SET NULL` merchant
+relation plus cascade FK to the opportunity. Uniqueness on
+`(opportunity_id, engine_version)` makes re-evaluation an upsert; indexes on
+merchant/priority/action power the overview aggregates.
 
 ## 8. Running the application
 
@@ -291,6 +315,54 @@ curl 'http://localhost:4000/opportunities'         # inspect detected cases
 curl 'http://localhost:4000/opportunities/overview'
 ```
 
+## 8.3 Decision engine & decisions API (Phase 4)
+
+Every recovery opportunity can be assessed by the deterministic decision
+engine (version `v1`). Scoring uses five transparent weighted factors
+(fixed weights, sum = 100):
+
+| Factor | Max points | Basis |
+| --- | --- | --- |
+| Financial value | 25 | Banded recoverable amount (minor units) |
+| Recency | 15 | Time since detection (explicitly injected evaluation time — no clock reads inside the engine) |
+| Failure recoverability | 25 | Deterministic failure-code category (transient full marks; hard declines zero + risk flag) |
+| Retry history | 15 | Observed failed retries correlated from stored payment events |
+| Historical outcomes | 20 | Recovery rate for the opportunity type — **only with ≥ 20 historical samples**; otherwise unavailable and scored 0 |
+
+Priority bands: `0–19 VERY_LOW · 20–39 LOW · 40–59 MEDIUM · 60–79 HIGH ·
+80–100 CRITICAL`.
+
+Confidence is a separate 0–100 measure of evidence quality behind the
+recommendation — **not** a success probability. It grows with a mapped failure
+code, sufficient historical samples and observed retry behavior.
+
+Recommendations come from ordered safety rules: hard decline → `DO_NOT_RETRY`;
+authentication/funding failures → `CUSTOMER_ACTION_REQUIRED`; ≥2 failed retries
+with a very recent attempt → `WAIT`; low confidence or unknown failure class →
+`REVIEW`; ≥4 failed attempts → `REVIEW`; closed opportunities → `NO_ACTION`;
+otherwise → `RETRY`. When evidence is insufficient the engine always prefers
+`REVIEW` over an unsafe automated recommendation.
+
+Read API:
+
+```text
+GET /opportunities/:id/decision   → { score, priority, confidence, recommendedAction,
+                                      reasons[], factors[], riskFlags[], engineVersion,
+                                      evaluatedAt }
+GET /decisions/overview           → { criticalOpportunities, highPriorityOpportunities,
+                                      recommendedRetries, reviewRequired, doNotRetry,
+                                      averageConfidence|null, engineVersion }
+```
+
+- The first read lazily evaluates and persists; re-reads return the stored
+  decision unless the opportunity changed afterwards (staleness via
+  `updatedAt`), in which case it is transparently re-evaluated.
+- `GET /opportunities` items now include an additive `decision` summary
+  (score/priority/confidence/action) when available — existing fields are
+  unchanged.
+- Overview metrics honor the optional `merchantId` filter so counts never
+  cross tenant boundaries.
+
 ## 9. Tests
 
 ```bash
@@ -311,8 +383,15 @@ in-memory store that enforces the same uniqueness as PostgreSQL — and Phase 3
 detection: rule-level suppression/correlation/expiry behavior, detector
 determinism and mutual exclusivity, opportunity creation/resolution with tenant
 isolation and idempotent replays, P2002 fallback in the opportunity repository,
-opportunities route filters/overview/detail responses, and the end-to-end
-webhook → detection → recovery flow through the real Fastify app.
+opportunities route filters/overview/detail responses, the end-to-end
+webhook → detection → recovery flow through the real Fastify app — and Phase 4
+decisions: engine scoring bands and boundary values, priority mapping,
+score-vs-confidence separation, every failure category, retry recency/count
+behavior, safety routing (DO_NOT_RETRY / CUSTOMER_ACTION_REQUIRED / REVIEW /
+NO_ACTION), determinism, factor explainability, version stamping, service
+orchestration (lazy evaluation, staleness re-evaluation, tenant attribution),
+repository upsert semantics, decision route contracts (valid/missing/invalid
+UUID/overview scoping) and additive list summaries.
 
 ## 10. Lint
 
@@ -341,22 +420,24 @@ npm run build       # compiles API to dist/ and builds the Next.js app
 
 ## 13. What is NOT implemented yet
 
-No AI/LLM usage of any kind, no recovery strategies or actions, no payment
-retries or links, no voice recovery, no merchant memory, no anomaly detection,
-no synthetic transactions or simulation, no analytics beyond the opportunity
-read API, no authentication, and no active recovery execution — `RECOVERED`
-status reflects only a customer-initiated successful retry observed in the
-event stream, never an action RecoveryOS took.
+No AI/LLM usage of any kind (the decision engine is a deterministic heuristic
+model, not machine learning), no recovery execution of any kind — no payment
+retries, links, charges or customer messaging — no voice recovery, no merchant
+memory, no anomaly detection, no synthetic transactions or simulation, no
+analytics beyond the read APIs, no authentication, and no active recovery —
+`RECOVERED` status reflects only a customer-initiated successful retry observed
+in the event stream, never an action RecoveryOS took.
 
 ## 14. Planned future phases
 
-~~Phase 2 Razorpay integration + webhook ingestion + normalization +
-idempotency~~ (delivered) · ~~Phase 4 revenue risk engine~~ (delivered as the
-Phase 3 deterministic detection engine; AI-assisted risk scoring remains in the
-intelligence phases) · Phase 5 synthetic data + simulation + replay · Phase 6
+~~Phase 2 Razorpay integration + webhook ingestion~~ (delivered) · ~~Phase 3
+revenue leakage detection~~ (delivered) · ~~Phase 4 deterministic decision
+engine~~ (delivered) · Phase 5 synthetic data + simulation + replay · Phase 6
 recovery intelligence/context/pattern engines + merchant memory · Phase 7 AI
-decision agent · Phase 8 policy/safety engine · Phase 9 recovery action
-orchestrator · Phase 10 outcome verification · Phase 11 recovery ledger ·
-Phase 12 adaptive merchant memory · Phase 13 recovery modules · Phase 14
-Hinglish voice recovery · Phase 15 full merchant dashboard. Details:
-[docs/architecture.md](docs/architecture.md).
+decision agent behind the existing engine interface (ML model trained on
+accumulated outcomes may replace or augment `DeterministicDecisionEngine`;
+the interface and feature extraction are already model-ready) · Phase 8
+policy/safety engine · Phase 9 recovery action orchestrator · Phase 10 outcome
+verification · Phase 11 recovery ledger · Phase 12 adaptive merchant memory ·
+Phase 13 recovery modules · Phase 14 Hinglish voice recovery · Phase 15 full
+merchant dashboard. Details: [docs/architecture.md](docs/architecture.md).

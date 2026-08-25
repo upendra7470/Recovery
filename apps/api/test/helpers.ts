@@ -14,6 +14,13 @@ import type {
   RecoveryOpportunityRow,
   RecoveryOpportunityStore,
 } from '../src/domain/recovery-opportunity.js';
+import type {
+  DecisionPriority,
+  NewRecoveryDecisionData,
+  RecommendedAction,
+  RecoveryDecisionRow,
+  RecoveryDecisionStore,
+} from '../src/domain/recovery-decision.js';
 import type { AppDatabase } from '../src/lib/database.js';
 
 export function makeTestEnv(overrides: Partial<Record<keyof AppEnv, string>> = {}): AppEnv {
@@ -48,6 +55,141 @@ export function createDbExecutorMock(
     paymentAccount: overrides.paymentAccount ?? createAccountLookupStoreMock(),
     recoveryOpportunity:
       overrides.recoveryOpportunity ?? createRecoveryOpportunityStoreMock(),
+    recoveryDecision:
+      overrides.recoveryDecision ?? createRecoveryDecisionStoreMock(),
+  };
+}
+
+export function createRecoveryDecisionStoreMock(
+  overrides: Partial<RecoveryDecisionStore> = {}
+): RecoveryDecisionStore {
+  return {
+    upsert: vi.fn(async (data: NewRecoveryDecisionData) => sampleDecisionRow(data)),
+    findByOpportunityAndEngineVersion: vi.fn(
+      async (): Promise<RecoveryDecisionRow | null> => null
+    ),
+    findLatestByOpportunityIds: vi.fn(async (): Promise<RecoveryDecisionRow[]> => []),
+    countByPriority: vi.fn(async () => 0),
+    countByRecommendedAction: vi.fn(async () => 0),
+    averageConfidence: vi.fn(async () => null),
+    ...overrides,
+  };
+}
+
+/**
+ * In-memory RecoveryDecisionStore enforcing the database's
+ * (opportunity_id, engine_version) uniqueness with upsert semantics so route
+ * and service tests exercise re-evaluation without PostgreSQL.
+ */
+export class InMemoryRecoveryDecisionStore implements RecoveryDecisionStore {
+  readonly rows = new Map<string, RecoveryDecisionRow>();
+  upsertCalls: NewRecoveryDecisionData[] = [];
+
+  async upsert(data: NewRecoveryDecisionData): Promise<RecoveryDecisionRow> {
+    this.upsertCalls.push(data);
+    const key = decisionKey(data.opportunityId, data.engineVersion);
+    const existing = this.rows.get(key);
+    if (existing !== undefined) {
+      const updated: RecoveryDecisionRow = {
+        ...existing,
+        score: data.score,
+        priority: data.priority,
+        confidence: data.confidence,
+        recommendedAction: data.recommendedAction,
+        reasons: [...data.reasons],
+        factors: [...data.factors],
+        riskFlags: [...data.riskFlags],
+        evaluatedAt: data.evaluatedAt,
+        merchantId: data.merchantId,
+        updatedAt: new Date(),
+      };
+      this.rows.set(key, updated);
+      return updated;
+    }
+    const row: RecoveryDecisionRow = {
+      ...data,
+      id: randomUUID(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.rows.set(key, row);
+    return row;
+  }
+
+  async findByOpportunityAndEngineVersion(
+    opportunityId: string,
+    engineVersion: string
+  ): Promise<RecoveryDecisionRow | null> {
+    return this.rows.get(decisionKey(opportunityId, engineVersion)) ?? null;
+  }
+
+  async findLatestByOpportunityIds(opportunityIds: readonly string[]): Promise<RecoveryDecisionRow[]> {
+    const matches: RecoveryDecisionRow[] = [];
+    for (const row of this.rows.values()) {
+      if (opportunityIds.includes(row.opportunityId)) {
+        matches.push(row);
+      }
+    }
+    return matches.sort((a, b) => b.evaluatedAt.getTime() - a.evaluatedAt.getTime());
+  }
+
+  async countByPriority(priority: DecisionPriority, merchantId?: string): Promise<number> {
+    let count = 0;
+    for (const row of this.rows.values()) {
+      if (merchantId !== undefined && row.merchantId !== merchantId) {
+        continue;
+      }
+      if (row.priority === priority) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  async countByRecommendedAction(action: RecommendedAction, merchantId?: string): Promise<number> {
+    let count = 0;
+    for (const row of this.rows.values()) {
+      if (merchantId !== undefined && row.merchantId !== merchantId) {
+        continue;
+      }
+      if (row.recommendedAction === action) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  async averageConfidence(merchantId?: string): Promise<number | null> {
+    let total = 0;
+    let count = 0;
+    for (const row of this.rows.values()) {
+      if (merchantId !== undefined && row.merchantId !== merchantId) {
+        continue;
+      }
+      total += row.confidence;
+      count += 1;
+    }
+    return count === 0 ? null : Math.round((total / count) * 100) / 100;
+  }
+}
+
+function sampleDecisionRow(overrides: Partial<RecoveryDecisionRow> = {}): RecoveryDecisionRow {
+  return {
+    id: randomUUID(),
+    merchantId: null,
+    opportunityId: randomUUID(),
+    engineVersion: 'v1',
+    score: 50,
+    priority: 'MEDIUM',
+    confidence: 50,
+    recommendedAction: 'REVIEW',
+    reasons: ['Sample reason'],
+    factors: [],
+    riskFlags: [],
+    evaluatedAt: new Date(),
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
   };
 }
 
@@ -115,6 +257,7 @@ export function createRecoveryOpportunityStoreMock(
     markRecovered: vi.fn(async ({ id }: { id: string }) => sampleOpportunityRow({ id })),
     summarizeByStatusAndCurrency: vi.fn(async () => []),
     countByType: vi.fn(async () => 0),
+    outcomeStatsByType: vi.fn(async () => ({ total: 0, recovered: 0 })),
     ...overrides,
   };
 }
@@ -335,6 +478,21 @@ export class InMemoryRecoveryOpportunityStore implements RecoveryOpportunityStor
     }
     return count;
   }
+
+  async outcomeStatsByType(type: string): Promise<{ total: number; recovered: number }> {
+    let total = 0;
+    let recovered = 0;
+    for (const row of this.rows.values()) {
+      if (row.type !== type) {
+        continue;
+      }
+      total += 1;
+      if (row.status === 'RECOVERED') {
+        recovered += 1;
+      }
+    }
+    return { total, recovered };
+  }
 }
 
 function sampleOpportunityRow(overrides: Partial<RecoveryOpportunityRow> = {}): RecoveryOpportunityRow {
@@ -367,4 +525,8 @@ function eventKey(provider: string, providerEventId: string): string {
 
 function opportunityKey(sourceEventId: string, type: string): string {
   return `${sourceEventId}:${type}`;
+}
+
+function decisionKey(opportunityId: string, engineVersion: string): string {
+  return `${opportunityId}:${engineVersion}`;
 }

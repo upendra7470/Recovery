@@ -4,6 +4,7 @@ import type { Logger } from 'pino';
 import {
   createPrismaPaymentAccountLookupStore,
   createPrismaPaymentEventStore,
+  createPrismaRecoveryDecisionStore,
   createPrismaRecoveryOpportunityStore,
 } from '../repositories/prisma-stores.js';
 
@@ -41,5 +42,6 @@ export function createAppDatabase(client: PrismaClient): AppDatabase {
     paymentEvent: createPrismaPaymentEventStore(client),
     paymentAccount: createPrismaPaymentAccountLookupStore(client),
     recoveryOpportunity: createPrismaRecoveryOpportunityStore(client),
+    recoveryDecision: createPrismaRecoveryDecisionStore(client),
   };
 }

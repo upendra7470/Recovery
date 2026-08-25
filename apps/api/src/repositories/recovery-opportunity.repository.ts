@@ -96,6 +96,13 @@ export class RecoveryOpportunityRepository {
     return this.store.countByType(type, merchantId);
   }
 
+  outcomeStatsByType(type: RecoveryOpportunityType): Promise<{
+    total: number;
+    recovered: number;
+  }> {
+    return this.store.outcomeStatsByType(type);
+  }
+
   private toRowData(args: {
     finding: DetectionFinding;
     sourceEvent: PaymentEventRow;

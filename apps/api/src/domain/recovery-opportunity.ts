@@ -143,4 +143,13 @@ export interface RecoveryOpportunityStore {
   }): Promise<RecoveryOpportunityRow>;
   summarizeByStatusAndCurrency(merchantId?: string): Promise<OpportunityStatusSummary[]>;
   countByType(type: RecoveryOpportunityType, merchantId?: string): Promise<number>;
+  /**
+   * Historical outcome statistics for an opportunity type across ALL merchants
+   * (detection history is shared operational knowledge; decisions remain
+   * tenant-scoped). Used by the decision engine as historical context.
+   */
+  outcomeStatsByType(type: RecoveryOpportunityType): Promise<{
+    total: number;
+    recovered: number;
+  }>;
 }

@@ -1,4 +1,4 @@
-import type { PrismaClient } from '@prisma/client';
+import type { Prisma, PrismaClient } from '@prisma/client';
 import type {
   AccountReference,
   PaymentAccountLookupStore,
@@ -12,6 +12,13 @@ import type {
   RecoveryOpportunityRow,
   RecoveryOpportunityStore,
 } from '../domain/recovery-opportunity.js';
+import type {
+  DecisionFactor,
+  DecisionRiskFlagDetail,
+  NewRecoveryDecisionData,
+  RecoveryDecisionRow,
+  RecoveryDecisionStore,
+} from '../domain/recovery-decision.js';
 
 /**
  * Prisma-backed implementations of the ingestion/detection store boundaries.
@@ -170,6 +177,126 @@ export function createPrismaRecoveryOpportunityStore(
       return client.recoveryOpportunity.count({
         where: { type, ...(merchantId !== undefined ? { merchantId } : {}) },
       });
+    },
+    async outcomeStatsByType(type) {
+      const grouped = await client.recoveryOpportunity.groupBy({
+        by: ['status'],
+        where: { type },
+        _count: { _all: true },
+      });
+      let total = 0;
+      let recovered = 0;
+      for (const group of grouped) {
+        total += group._count._all;
+        if (group.status === 'RECOVERED') {
+          recovered += group._count._all;
+        }
+      }
+      return { total, recovered };
+    },
+  };
+}
+
+/**
+ * Serialization boundary for the decision JSON columns: Prisma returns
+ * JsonValue while the domain works with typed arrays. Everything stored under
+ * these keys was written by this store from the same typed shapes, so the
+ * assertions below are safe by construction.
+ */
+function toDecisionRow(row: {
+  id: string;
+  merchantId: string | null;
+  opportunityId: string;
+  engineVersion: string;
+  score: number;
+  priority: RecoveryDecisionRow['priority'];
+  confidence: number;
+  recommendedAction: RecoveryDecisionRow['recommendedAction'];
+  reasons: unknown;
+  factors: unknown;
+  riskFlags: unknown;
+  evaluatedAt: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}): RecoveryDecisionRow {
+  return {
+    ...row,
+    reasons: row.reasons as string[],
+    factors: row.factors as DecisionFactor[],
+    riskFlags: row.riskFlags as DecisionRiskFlagDetail[],
+  };
+}
+
+function toDecisionJsonInput(data: NewRecoveryDecisionData): {
+  reasons: Prisma.InputJsonValue;
+  factors: Prisma.InputJsonValue;
+  riskFlags: Prisma.InputJsonValue;
+} {
+  return {
+    reasons: data.reasons,
+    factors: data.factors as unknown as Prisma.InputJsonValue,
+    riskFlags: data.riskFlags as unknown as Prisma.InputJsonValue,
+  };
+}
+
+export function createPrismaRecoveryDecisionStore(client: PrismaClient): RecoveryDecisionStore {
+  return {
+    async upsert(data) {
+      const json = toDecisionJsonInput(data);
+      const row = await client.recoveryDecision.upsert({
+        where: {
+          opportunityId_engineVersion: {
+            opportunityId: data.opportunityId,
+            engineVersion: data.engineVersion,
+          },
+        },
+        create: { ...data, ...json },
+        update: {
+          score: data.score,
+          priority: data.priority,
+          confidence: data.confidence,
+          recommendedAction: data.recommendedAction,
+          reasons: json.reasons,
+          factors: json.factors,
+          riskFlags: json.riskFlags,
+          evaluatedAt: data.evaluatedAt,
+          merchantId: data.merchantId,
+        },
+      });
+      return toDecisionRow(row);
+    },
+    async findByOpportunityAndEngineVersion(opportunityId, engineVersion) {
+      const row = await client.recoveryDecision.findUnique({
+        where: { opportunityId_engineVersion: { opportunityId, engineVersion } },
+      });
+      return row ? toDecisionRow(row) : null;
+    },
+    async findLatestByOpportunityIds(opportunityIds) {
+      if (opportunityIds.length === 0) {
+        return [];
+      }
+      const rows = await client.recoveryDecision.findMany({
+        where: { opportunityId: { in: [...opportunityIds] } },
+        orderBy: { evaluatedAt: 'desc' },
+      });
+      return rows.map(toDecisionRow);
+    },
+    async countByPriority(priority, merchantId?: string) {
+      return client.recoveryDecision.count({
+        where: { priority, ...(merchantId !== undefined ? { merchantId } : {}) },
+      });
+    },
+    async countByRecommendedAction(recommendedAction, merchantId?: string) {
+      return client.recoveryDecision.count({
+        where: { recommendedAction, ...(merchantId !== undefined ? { merchantId } : {}) },
+      });
+    },
+    async averageConfidence(merchantId?: string) {
+      const aggregated = await client.recoveryDecision.aggregate({
+        _avg: { confidence: true },
+        ...(merchantId !== undefined ? { where: { merchantId } } : {}),
+      });
+      return aggregated._avg.confidence ?? null;
     },
   };
 }

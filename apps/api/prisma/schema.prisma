@@ -48,6 +48,27 @@ enum RecoveryOpportunityStatus {
   DISMISSED
 }
 
+/// Operational urgency band derived from the decision score.
+/// Mirrors DecisionPriority in src/domain/recovery-decision.ts.
+enum DecisionPriority {
+  VERY_LOW
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+/// Controlled vocabulary of recommendations produced by the deterministic
+/// decision engine. Mirrors RecommendedAction in src/domain/recovery-decision.ts.
+enum RecommendedAction {
+  RETRY
+  WAIT
+  CUSTOMER_ACTION_REQUIRED
+  DO_NOT_RETRY
+  REVIEW
+  NO_ACTION
+}
+
 model Merchant {
   id              String                @id @default(uuid()) @db.Uuid
   name            String
@@ -56,6 +77,7 @@ model Merchant {
   paymentAccounts PaymentAccount[]
   paymentEvents   PaymentEvent[]
   opportunities   RecoveryOpportunity[]
+  decisions       RecoveryDecision[]
 
   @@map("merchants")
 }
@@ -143,6 +165,7 @@ model RecoveryOpportunity {
   paymentAccount    PaymentAccount?           @relation(fields: [paymentAccountId], references: [id], onDelete: SetNull)
   sourceEvent       PaymentEvent              @relation("OpportunitySourceEvent", fields: [sourceEventId], references: [id], onDelete: Cascade)
   recoveryEvent     PaymentEvent?             @relation("OpportunityRecoveryEvent", fields: [recoveryEventId], references: [id], onDelete: SetNull)
+  decisions         RecoveryDecision[]
 
   /// Idempotency: one opportunity per (source event, detection category).
   @@unique([sourceEventId, type])
@@ -153,4 +176,41 @@ model RecoveryOpportunity {
   @@index([providerPaymentId])
   @@index([providerOrderId])
   @@map("recovery_opportunities")
+}
+
+model RecoveryDecision {
+  id                String             @id @default(uuid()) @db.Uuid
+  merchantId        String?            @db.Uuid
+  opportunityId     String             @db.Uuid
+  /// Engine version that produced this decision (e.g. "v1"). Decisions from
+  /// different engine versions must never be compared or mixed silently.
+  engineVersion     String
+  /// 0–100 operational priority score from transparent weighted factors.
+  score             Int
+  priority          DecisionPriority
+  /// 0–100 confidence in the recommendation's meaningfulness (NOT a success
+  /// probability). Low confidence pushes the engine toward REVIEW.
+  confidence        Int
+  recommendedAction RecommendedAction
+  /// Human-readable deterministic explanations derived from the factors.
+  reasons           Json
+  /// Structured factors: name, contribution, value, explanation.
+  factors           Json
+  /// Safety/quality flags with per-flag explanations.
+  riskFlags         Json
+  /// When the engine produced this assessment (passed explicitly — the engine
+  /// itself never reads the clock).
+  evaluatedAt       DateTime
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  merchant          Merchant?          @relation(fields: [merchantId], references: [id], onDelete: SetNull)
+  opportunity       RecoveryOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  /// One current decision per (opportunity, engine version); re-evaluation
+  /// upserts. Append-only decision history is a future extension.
+  @@unique([opportunityId, engineVersion])
+  @@index([merchantId])
+  @@index([priority])
+  @@index([recommendedAction])
+  @@map("recovery_decisions")
 }

@@ -1,11 +1,16 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import { EmptyState } from '@/components/ui/empty-state';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatCard } from '@/components/ui/stat-card';
 import { SystemStatusPill } from '@/components/ui/system-status-pill';
 import { getApiHealth } from '@/lib/api/status';
-import { getOpportunityOverview, type CurrencyBreakdown } from '@/lib/api/opportunities';
+import {
+  getDecisionsOverview,
+  getOpportunityOverview,
+  type CurrencyBreakdown,
+} from '@/lib/api/opportunities';
 import { formatMinorAmount, formatPercent } from '@/lib/format';
 
 export const dynamic = 'force-dynamic';
@@ -32,7 +37,11 @@ function primaryCurrencyTotals(currencies: CurrencyBreakdown[]): {
 }
 
 export default async function OverviewPage() {
-  const [apiHealth, overview] = await Promise.all([getApiHealth(), getOpportunityOverview()]);
+  const [apiHealth, overview, decisions] = await Promise.all([
+    getApiHealth(),
+    getOpportunityOverview(),
+    getDecisionsOverview(),
+  ]);
 
   const totals =
     overview !== null
@@ -101,6 +110,69 @@ export default async function OverviewPage() {
           . Totals above show INR only.
         </p>
       )}
+
+      <div className="mt-6">
+        <SectionCard
+          title="Decision Engine Signals"
+          subtitle={
+            decisions
+              ? `Deterministic assessments · engine ${decisions.engineVersion}`
+              : 'Decision engine'
+          }
+        >
+          {decisions === null ? (
+            <EmptyState
+              title="Decision engine unreachable."
+              message="Could not load decision metrics from the API. Verify the service is running and try again."
+            />
+          ) : decisions.averageConfidence === null &&
+            decisions.criticalOpportunities === 0 &&
+            decisions.highPriorityOpportunities === 0 &&
+            decisions.recommendedRetries === 0 &&
+            decisions.reviewRequired === 0 ? (
+            <EmptyState
+              title="No decisions evaluated yet."
+              message="Decisions appear when recovery cases are assessed. Open a recovery case to trigger its first evaluation."
+            />
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <StatCard
+                label="Critical Priority"
+                value={String(decisions.criticalOpportunities)}
+                tone="risk"
+                hint="Score 80–100 opportunities."
+              />
+              <StatCard
+                label="High Priority"
+                value={String(decisions.highPriorityOpportunities)}
+                hint="Score 60–79 opportunities."
+              />
+              <StatCard
+                label="Recommended Retries"
+                value={String(decisions.recommendedRetries)}
+                tone="positive"
+                hint={`${decisions.reviewRequired} case${decisions.reviewRequired === 1 ? '' : 's'} flagged for review instead.`}
+              />
+              <StatCard
+                label="Avg Confidence"
+                value={
+                  decisions.averageConfidence !== null
+                    ? formatPercent(decisions.averageConfidence)
+                    : '—'
+                }
+                hint="Evidence quality across stored decisions."
+              />
+            </div>
+          )}
+          <p className="mt-4 text-xs text-slate-400">
+            Advisory only — RecoveryOS does not execute payments or retries.{' '}
+            <Link href="/recovery-cases" className="text-indigo-600 hover:underline">
+              View recovery cases
+            </Link>
+            .
+          </p>
+        </SectionCard>
+      </div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
         <SectionCard

@@ -8,6 +8,10 @@ import {
 } from '../domain/recovery-opportunity.js';
 import { toEventView } from '../detection/event-view.js';
 import type { AppDatabase } from '../lib/database.js';
+import type {
+  OpportunityDecisionSummaryResponse,
+} from './decisions.js';
+import type { RecoveryDecisionRow } from '../domain/recovery-decision.js';
 
 export interface OpportunitySummaryResponse {
   id: string;
@@ -23,6 +27,8 @@ export interface OpportunitySummaryResponse {
   reason: string;
   detectedAt: Date;
   expiresAt: Date | null;
+  /** Latest stored decision summary; absent when not yet evaluated. */
+  decision?: OpportunityDecisionSummaryResponse;
 }
 
 export interface OpportunityListResponse {
@@ -79,6 +85,16 @@ function toSummaryResponse(row: RecoveryOpportunityRow): OpportunitySummaryRespo
   };
 }
 
+function toDecisionSummary(decision: RecoveryDecisionRow): OpportunityDecisionSummaryResponse {
+  return {
+    score: decision.score,
+    priority: decision.priority,
+    confidence: decision.confidence,
+    recommendedAction: decision.recommendedAction,
+    evaluatedAt: decision.evaluatedAt.toISOString(),
+  };
+}
+
 function toCurrencyBreakdowns(summaries: OpportunityStatusSummary[]): CurrencyBreakdown[] {
   const byCurrency = new Map<string, CurrencyBreakdown>();
   for (const summary of summaries) {
@@ -123,8 +139,29 @@ export const opportunityRoutes: FastifyPluginAsync = async (app) => {
         repository.count(filters),
       ]);
 
+      // Attach latest stored decision per opportunity (additive field; absent
+      // when an opportunity has not been evaluated yet).
+      const decisionsByOpportunityId = new Map<string, RecoveryDecisionRow>();
+      if (rows.length > 0) {
+        const decisionRows = await app.decisions.findLatestByOpportunityIds(
+          rows.map((row) => row.id)
+        );
+        for (const decision of decisionRows) {
+          const existing = decisionsByOpportunityId.get(decision.opportunityId);
+          if (existing === undefined || decision.evaluatedAt > existing.evaluatedAt) {
+            decisionsByOpportunityId.set(decision.opportunityId, decision);
+          }
+        }
+      }
+
       const body: OpportunityListResponse = {
-        opportunities: rows.map(toSummaryResponse),
+        opportunities: rows.map((row) => {
+          const summary = toSummaryResponse(row);
+          const decision = decisionsByOpportunityId.get(row.id);
+          return decision !== undefined
+            ? { ...summary, decision: toDecisionSummary(decision) }
+            : summary;
+        }),
         total,
       };
       return reply.send(body);

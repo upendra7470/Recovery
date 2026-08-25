@@ -212,6 +212,65 @@ Read surface: `GET /opportunities` (list+count), `GET /opportunities/overview`
 with evidence + source-event summary). All honor an optional `merchantId`
 filter; raw payloads and customer PII are never exposed.
 
+## 5.3 Recovery decision engine (Phase 4)
+
+```
+RecoveryOpportunity (persisted)
+      │
+      ▼
+Feature extraction                     decision/features.ts (pure)
+      │  recoverableAmount · currency · opportunityAge · evaluatedAtMs ·
+      │  observedFailedRetries (+ last retry time) from correlated FAILED
+      │  events after the source event · failure category from evidence code ·
+      │  historical outcome stats per opportunity type
+      │  Unobserved data stays null — never fabricated.
+      ▼
+DeterministicDecisionEngine            decision/engine.ts (pure, version "v1")
+      │  ┌ scoring: five fixed-weight factors → 0–100 score
+      │  │   value(25) + recency(15) + recoverability(25)
+      │  │   + retryHistory(15) + historicalSupport(20*)
+      │  │   *historicalSupport requires ≥20 samples; else unavailable → 0
+      │  ├ priority bands: <20 VERY_LOW · <40 LOW · <60 MEDIUM
+      │  │                 <80 HIGH · ≥80 CRITICAL
+      │  ├ confidence (0–100): evidence quality — mapped failure code,
+      │  │   sample size, observed behavior. NOT a success probability.
+      │  └ recommendation: ordered safety rules → RETRY | WAIT |
+      │    CUSTOMER_ACTION_REQUIRED | DO_NOT_RETRY | REVIEW | NO_ACTION
+      ▼
+Failure classification                 decision/failure-category.ts (pure)
+      │  provider error codes → TRANSIENT / INSUFFICIENT_FUNDS /
+      │  AUTHENTICATION / HARD_DECLINE / UNKNOWN (unmapped stays UNKNOWN)
+      ▼
+Upsert persistence                     repositories/recovery-decision.repository.ts
+      │  unique (opportunity_id, engine_version); merchant attribution copied
+      │  only from the persisted opportunity; factors/reasons/riskFlags stored
+      │  as JSON for audit and dashboard explainability
+      ▼
+Read APIs + dashboard                  routes/decisions.ts + recovery-cases UI
+```
+
+Key decisions:
+
+- **Deterministic and auditable.** No randomness, no clock reads inside the
+  engine (evaluation time is injected), identical input ⇒ identical output.
+  Every stored decision explains itself via structured factors.
+- **A heuristic model, not machine learning.** Weights are fixed, documented
+  engineering choices; changing them requires bumping `engineVersion` so old
+  decisions keep their original meaning. The interface (`DecisionEngine`
+  shape: features in, result out) is deliberately model-ready for a future ML
+  replacement (see §11).
+- **Safety-first ordering.** `DO_NOT_RETRY` beats high scores; low confidence
+  or unknown classification forces `REVIEW`; closed opportunities yield
+  `NO_ACTION`. The system prefers admitting uncertainty over unsafe advice.
+- **Honest history.** Outcome statistics below the minimum sample size are
+  flagged `INSUFFICIENT_HISTORICAL_DATA` and excluded from scoring rather
+  than producing invented recovery rates.
+- **Lazy evaluation with staleness awareness.** First decision read evaluates
+  and persists; if the opportunity changes afterwards (`updatedAt`), the next
+  read transparently re-evaluates. No background workers in Phase 4.
+- **Tenant isolation.** Decisions inherit merchant/account attribution only
+  from their opportunity; overview aggregates scope strictly by merchantId.
+
 ## 6. Logging & observability
 
 Structured JSON logs via pino: ISO timestamps, level, `service:"recoveryos"`,
@@ -260,6 +319,15 @@ JSON, detected/expires/resolved timestamps, cascade FK to the source event,
 `SET NULL` FK to the recovery event, and indexed merchant/account columns.
 Uniqueness on `(source_event_id, type)` makes detection idempotent.
 
+Phase 4 added `recovery_decisions` (migration
+`20260825171037_add_recovery_decisions`): score (0–100), priority enum
+[VERY_LOW|LOW|MEDIUM|HIGH|CRITICAL], confidence (0–100), recommended-action
+enum [RETRY|WAIT|CUSTOMER_ACTION_REQUIRED|DO_NOT_RETRY|REVIEW|NO_ACTION],
+reasons/factors/risk-flags JSON, engine version string, evaluated timestamp,
+cascade FK to the opportunity, `SET NULL` merchant relation. Uniqueness on
+`(opportunity_id, engine_version)` makes re-evaluation an upsert; indexes on
+merchant/priority/action serve overview aggregates.
+
 Later phases will add (non-exhaustive): simulation/replay datasets (P5),
 decisions + rationale + policy evaluations (P6–P8), recovery actions + attempts
 (P9), outcome verifications (P10), append-only recovery ledger entries (P11),
@@ -284,6 +352,15 @@ Vitest, node environment, no live DB required for CI determinism:
   opportunity creation/resolution with tenant isolation and replay idempotency,
   P2002 fallback in the repository, opportunities route filters/overview/detail
   contracts, and end-to-end webhook → detection → recovery flow tests.
+- Decision engine: scoring bands and boundary values (0–100 clamp), priority
+  band mapping at every boundary, score-vs-confidence separation, every
+  failure category (including unmapped codes), retry count/recency behavior,
+  safety routing for hard declines/auth/funding/unknown/closed cases,
+  multi-run determinism, factor explainability, version stamping. Service:
+  lazy evaluation, staleness re-evaluation, tenant attribution, historical
+  statistics wiring. Repository: upsert semantics, per-version rows, overview
+  aggregates. Routes: valid/missing/malformed ids, honest zero states,
+  merchantId scoping, additive list summaries.
 - Web: pure formatting logic (`formatInr`, `formatMinorAmount`, `formatPercent`).
 
 Integration-style tests against a live PostgreSQL run naturally during local
@@ -296,15 +373,41 @@ first data-bearing phase.
 | --- | --- | --- |
 | 2 ✅ | Razorpay webhooks | `routes/webhooks.ts` + `adapters/razorpay.ts` + `PaymentEventRepository` |
 | 3 ✅ | Revenue leakage detection | `detection/` rules + detector, `services/revenue-leakage.service.ts`, `RecoveryOpportunityRepository`, `routes/opportunities.ts` |
+| 4 ✅ | Decision engine | `decision/` engine + features + failure categories, `services/recovery-decision.service.ts`, `RecoveryDecisionRepository`, `routes/decisions.ts` |
 | 5 | Simulation/replay | `services/simulation` reusing event normalization |
 | 6–8 | Intelligence/context/pattern/memory | `services/intelligence/*`, new repos |
-| 7 | AI decision agent | behind a provider interface; deterministic fallbacks required |
+| 7 | AI decision agent | behind the existing decision-engine interface; deterministic fallbacks required |
 | 8 | Policy engine | pure functions over decisions; fail-closed defaults |
 | 9 | Action orchestrator | `services/actions` + outbox pattern on existing Postgres |
 | 10 | Outcome verification | consumes orchestrator results, writes ledger candidates |
 | 11 | Recovery ledger | append-only table + read APIs |
 | 12 | Adaptive memory | evolves merchant memory schemas/consumers |
 | 13–15 | Modules, voice, full dashboard | new route modules + dashboard sections |
+
+## 11. Future ML extension point (documented, not implemented)
+
+Phase 4 ships only the `DeterministicDecisionEngine`. The seam for a future
+model is deliberately clean:
+
+```
+Historical payment data (payment_events, opportunities, decisions, outcomes)
+      ↓
+Feature engineering        ← decision/features.ts already isolates this step
+      ↓
+Model training / evaluation          (future phase — NOT in this repo today)
+      ↓
+Calibrated recovery probability
+      ↓
+MLDecisionEngine implements the same evaluate(features) → result contract
+      ↓
+Safety layer unchanged: risk flags, REVIEW-on-low-confidence and the
+recommendation rule order remain deterministic guardrails around any model
+```
+
+Requirements when that phase lands: version every model (`engineVersion`),
+keep the deterministic engine as fallback/fail-closed path, never let a model
+output bypass the safety rules, and store per-decision model metadata for
+audit. No external AI API is called anywhere in the current codebase.
 
 The foundation's stable seams — validated config, structured logging, central
 error handling, repository boundaries, health/readiness — are intended to remain
