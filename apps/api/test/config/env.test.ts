@@ -4,6 +4,8 @@ import { ConfigError, envSchema, loadEnv, parseEnv } from '../../src/config/env.
 const VALID_BASE = {
   NODE_ENV: 'production',
   DATABASE_URL: 'postgresql://user:pass@db.internal:5432/recoveryos',
+  AUTH_ENABLED: 'true',
+  AUTH_SESSION_SECRET: 'a'.repeat(32),
 };
 
 describe('parseEnv', () => {

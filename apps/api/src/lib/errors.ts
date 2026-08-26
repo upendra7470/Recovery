@@ -43,6 +43,12 @@ export class UnauthorizedError extends AppError {
   }
 }
 
+export class ForbiddenError extends AppError {
+  constructor(message = 'You do not have access to this resource.') {
+    super(403, 'FORBIDDEN', message);
+  }
+}
+
 export class InternalError extends AppError {
   constructor(message = 'An internal error occurred.', options?: { cause?: unknown }) {
     super(500, 'INTERNAL_ERROR', message, { cause: options?.cause });

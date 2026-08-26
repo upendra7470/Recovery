@@ -78,7 +78,31 @@ export const envSchema = z.object({
   RECOVERY_OPERATION_MAX_AGE_HOURS: z.coerce.number().int().min(1).max(8760).default(72),
   /** Deterministic exponential backoff base between automated attempts. */
   RECOVERY_RETRY_BACKOFF_SECONDS: z.coerce.number().int().min(1).max(86400).default(300),
+  // ---------------------------------------------------------------------------
+  // Authentication & tenant isolation (Phase 8) -- opt-in for existing
+  // deployments; MANDATORY in production (fail-fast below).
+  // ---------------------------------------------------------------------------
+  AUTH_ENABLED: booleanFlag(false),
+  AUTH_SESSION_SECRET: emptyToUndefined(z.string().min(32).optional()),
+  AUTH_SESSION_TTL_HOURS: z.coerce.number().int().min(1).max(720).default(24),
+  AUTH_COOKIE_SECURE: booleanFlag(true),
+  /** When set, auth endpoints accept credentialed CORS from this origin only. */
+  AUTH_ALLOWED_WEB_ORIGIN: emptyToUndefined(z.url().optional()),
 }).superRefine((env, ctx) => {
+  if (env.AUTH_ENABLED && env.AUTH_SESSION_SECRET === undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['AUTH_SESSION_SECRET'],
+      message: 'Required when AUTH_ENABLED=true (minimum 32 characters)',
+    });
+  }
+  if (!env.AUTH_ENABLED && env.NODE_ENV === 'production') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['AUTH_ENABLED'],
+      message: 'Authentication must be enabled in production',
+    });
+  }
   if (env.AI_ENABLED) {
     for (const field of ['AI_MODEL', 'AI_API_KEY', 'AI_BASE_URL'] as const) {
       if (env[field] === undefined) {

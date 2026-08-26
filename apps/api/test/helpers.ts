@@ -31,6 +31,11 @@ import type {
   RecoveryAIAdviceContent,
 } from '../src/domain/recovery-ai-advice.js';
 import type {
+  CreateMembershipInput,
+  CreateSessionInput,
+  CreateUserInput,
+} from '../src/domain/authentication.js';
+import type {
   ExecutionStatus,
   NewRecoveryExecutionData,
   RecoveryExecutionRow,
@@ -39,6 +44,12 @@ import type {
   RetryPaymentRequest,
   RetryPaymentResult,
 } from '../src/domain/recovery-execution.js';
+import type {
+  AuthenticationStore,
+  MerchantMembershipRow,
+  SessionRow,
+  UserRow,
+} from '../src/domain/authentication.js';
 import type { AppDatabase } from '../src/lib/database.js';
 
 export function makeTestEnv(overrides: Partial<Record<keyof AppEnv, string>> = {}): AppEnv {
@@ -63,6 +74,43 @@ export interface DbExecutorMock extends AppDatabase {
   $queryRaw: ReturnType<typeof vi.fn<QueryRawMock>>;
 }
 
+export function createAuthenticationStoreMock(
+  overrides: Partial<AuthenticationStore> = {}
+): AuthenticationStore {
+  return {
+    findUserByEmail: vi.fn(async (): Promise<UserRow | null> => null),
+    createUser: vi.fn(async (input: CreateUserInput) => ({
+      id: randomUUID(),
+      email: input.email,
+      passwordHash: input.passwordHash,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })),
+    findMembershipsByUser: vi.fn(async (): Promise<MerchantMembershipRow[]> => []),
+    findMembership: vi.fn(async (): Promise<MerchantMembershipRow | null> => null),
+    createMembership: vi.fn(async (input: CreateMembershipInput) => ({
+      id: randomUUID(),
+      userId: input.userId,
+      merchantId: input.merchantId,
+      role: input.role,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })),
+    createSession: vi.fn(async (input: CreateSessionInput) => ({
+      id: randomUUID(),
+      userId: input.userId,
+      tokenHash: input.tokenHash,
+      expiresAt: input.expiresAt,
+      revokedAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })),
+    findActiveSessionByTokenHash: vi.fn(async (): Promise<{ session: SessionRow; user: UserRow; memberships: MerchantMembershipRow[] } | null> => null),
+    revokeSession: vi.fn(async () => {}),
+    ...overrides,
+  };
+}
+
 export function createDbExecutorMock(
   impl?: QueryRawMock,
   overrides: Partial<DbExecutorMock> = {}
@@ -79,6 +127,7 @@ export function createDbExecutorMock(
       overrides.recoveryAIAdvice ?? createRecoveryAIAdviceStoreMock(),
     recoveryExecution:
       overrides.recoveryExecution ?? createRecoveryExecutionStoreMock(),
+    auth: overrides.auth ?? createAuthenticationStoreMock(),
   };
 }
 

@@ -103,7 +103,11 @@ describe('centralized error handling', () => {
 
 describe('error handling hardening in production mode', () => {
   it('keeps unknown errors generic when NODE_ENV is production', async () => {
-    const app = await buildTestApp({ NODE_ENV: 'production' });
+    const app = await buildTestApp({
+      NODE_ENV: 'production',
+      AUTH_ENABLED: 'true',
+      AUTH_SESSION_SECRET: 'a'.repeat(32),
+    });
 
     try {
       const response = await app.inject({ method: 'GET', url: '/boom' });
@@ -118,7 +122,11 @@ describe('error handling hardening in production mode', () => {
   });
 
   it('still returns useful envelopes for operational errors in production', async () => {
-    const app = await buildTestApp({ NODE_ENV: 'production' });
+    const app = await buildTestApp({
+      NODE_ENV: 'production',
+      AUTH_ENABLED: 'true',
+      AUTH_SESSION_SECRET: 'a'.repeat(32),
+    });
 
     try {
       const response = await app.inject({ method: 'GET', url: '/not-found' });

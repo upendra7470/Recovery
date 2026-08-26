@@ -2,6 +2,11 @@ import type { FastifyPluginAsync } from 'fastify';
 import { NotFoundError } from '../lib/errors.js';
 import { parseWith } from '../validation/parse.js';
 import {
+  assertObjectAccess,
+  requireAuthenticated,
+  requireMerchantScope,
+} from '../auth/guards.js';
+import {
   listOpportunitiesQuerySchema,
   type OpportunityStatusSummary,
   type RecoveryOpportunityRow,
@@ -126,8 +131,19 @@ export const opportunityRoutes: FastifyPluginAsync = async (app) => {
     '/opportunities',
     async (request, reply) => {
       const query = parseWith(listOpportunitiesQuerySchema, request.query);
+      let effectiveMerchantId: string | undefined = query.merchantId;
+      if (app.config.AUTH_ENABLED) {
+        const principal = requireAuthenticated(request.principal);
+        if (query.merchantId !== undefined) {
+          effectiveMerchantId = requireMerchantScope(principal, query.merchantId);
+        } else {
+          // When auth is enabled and caller omits merchantId, derive from principal.
+          // requireMerchantScope will auto-derive for single membership or throw 400 for multi.
+          effectiveMerchantId = requireMerchantScope(principal, undefined);
+        }
+      }
       const filters = {
-        merchantId: query.merchantId,
+        merchantId: effectiveMerchantId,
         status: query.status,
         type: query.type,
         ...(query.from !== undefined ? { detectedFrom: new Date(query.from) } : {}),
@@ -175,7 +191,17 @@ export const opportunityRoutes: FastifyPluginAsync = async (app) => {
         listOpportunitiesQuerySchema.pick({ merchantId: true }),
         request.query
       );
-      const merchantId = query.merchantId;
+      let merchantId: string | undefined = query.merchantId;
+      if (app.config.AUTH_ENABLED) {
+        const principal = requireAuthenticated(request.principal);
+        // For overview, if auth enabled, validate or derive merchant scope
+        if (query.merchantId !== undefined) {
+          merchantId = requireMerchantScope(principal, query.merchantId);
+        } else {
+          // Try to derive; if single membership, use it; if multiple, throw 400 requiring explicit
+          merchantId = requireMerchantScope(principal, undefined);
+        }
+      }
 
       const [summaries, failedPayments] = await Promise.all([
         repository.summarizeByStatusAndCurrency(merchantId),
@@ -202,6 +228,10 @@ export const opportunityRoutes: FastifyPluginAsync = async (app) => {
       const opportunity = await repository.findById(id);
       if (opportunity === null) {
         throw new NotFoundError('Recovery opportunity');
+      }
+      if (app.config.AUTH_ENABLED) {
+        const principal = requireAuthenticated(request.principal);
+        assertObjectAccess(principal, opportunity.merchantId, 'Recovery opportunity');
       }
 
       const sourceEvent = await findSourceEvent(app.db, opportunity.sourceEventId);

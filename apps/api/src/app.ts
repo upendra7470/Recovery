@@ -11,11 +11,14 @@ import { opportunityRoutes } from './routes/opportunities.js';
 import { decisionRoutes } from './routes/decisions.js';
 import { executionRoutes } from './routes/executions.js';
 import { operationsRoutes } from './routes/operations.js';
+import { authRoutes } from './routes/auth.js';
+import { authenticationPlugin } from './plugins/authentication.js';
 import { healthRoutes } from './routes/health.js';
 import { readyRoutes } from './routes/ready.js';
 import { webhookRoutes } from './routes/webhooks.js';
 import { RecoveryOpportunityRepository } from './repositories/recovery-opportunity.repository.js';
 import { RecoveryDecisionRepository } from './repositories/recovery-decision.repository.js';
+import { AuthenticationService } from './auth/authentication.service.js';
 import { RecoveryDecisionService } from './services/recovery-decision.service.js';
 import { RecoveryAIAdvisorService } from './services/recovery-ai-advisor.service.js';
 import { RecoveryExecutionService } from './services/recovery-execution.service.js';
@@ -59,6 +62,16 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   app.decorate('config', env);
   app.decorate('db', db);
+  app.decorate(
+    'authService',
+    new AuthenticationService(db.auth, { sessionTtlHours: env.AUTH_SESSION_TTL_HOURS }, app.log)
+  );
+  await app.register(authenticationPlugin, {
+    enabled: env.AUTH_ENABLED,
+    cookieSecure: env.AUTH_COOKIE_SECURE,
+    sessionTtlHours: env.AUTH_SESSION_TTL_HOURS,
+    allowedWebOrigin: env.AUTH_ALLOWED_WEB_ORIGIN,
+  });
   app.decorate('opportunities', new RecoveryOpportunityRepository(db.recoveryOpportunity));
   const decisionRepository = new RecoveryDecisionRepository(db.recoveryDecision);
   app.decorate('decisions', decisionRepository);
@@ -165,6 +178,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   registerSecurityHeaders(app);
   registerErrorHandler(app);
+  await app.register(authRoutes);
   await app.register(healthRoutes);
   await app.register(readyRoutes);
   await app.register(webhookRoutes);

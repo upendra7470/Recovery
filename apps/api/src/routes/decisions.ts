@@ -12,6 +12,10 @@ import {
   type RecoveryDecisionRow,
 } from '../domain/recovery-decision.js';
 import {
+  assertObjectAccess,
+  requireAuthenticated,
+} from '../auth/guards.js';
+import {
   aiAdviceParamsSchema,
   type RecoveryAIAdviceRow,
 } from '../domain/recovery-ai-advice.js';
@@ -180,13 +184,21 @@ function toAvailableAI(advice: RecoveryAIAdviceRow): AIAdviceAvailableResponse {
 export const decisionRoutes: FastifyPluginAsync = async (app) => {
   const service = app.decisionService;
 
-  app.get<{ Params: { id: string }; Reply: DecisionDetailResponse }>(
+app.get<{ Params: { id: string }; Reply: DecisionDetailResponse }>(
     '/opportunities/:id/decision',
     async (request, reply) => {
       const { id } = parseWith(decisionParamsSchema, request.params);
       const outcome = await service.getForOpportunity(id);
       if (outcome.decision === null) {
         throw new NotFoundError('Recovery opportunity');
+      }
+      if (app.config.AUTH_ENABLED) {
+        const opportunity = await app.opportunities.findById(id);
+        if (opportunity === null) {
+          throw new NotFoundError('Recovery opportunity');
+        }
+        const principal = requireAuthenticated(request.principal);
+        assertObjectAccess(principal, opportunity.merchantId, 'Recovery opportunity');
       }
       return reply.send(toDecisionDetail(outcome.decision));
     }
@@ -196,6 +208,14 @@ export const decisionRoutes: FastifyPluginAsync = async (app) => {
     '/opportunities/:id/ai-advice',
     async (request, reply) => {
       const { id } = parseWith(aiAdviceParamsSchema, request.params);
+      if (app.config.AUTH_ENABLED) {
+        const opportunity = await app.opportunities.findById(id);
+        if (opportunity === null) {
+          throw new NotFoundError('Recovery opportunity');
+        }
+        const principal = requireAuthenticated(request.principal);
+        assertObjectAccess(principal, opportunity.merchantId, 'Recovery opportunity');
+      }
       const outcome = await app.aiAdvisorService.getAdviceForOpportunity(id);
       if (outcome.status === 'not-found' || outcome.decision === null) {
         throw new NotFoundError('Recovery opportunity');

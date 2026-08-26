@@ -503,3 +503,53 @@ export function createPrismaRecoveryExecutionStore(
     },
   };
 }
+
+export function createPrismaAuthenticationStore(
+  client: PrismaClient
+): import('../domain/authentication.js').AuthenticationStore {
+  type AuthStore = import('../domain/authentication.js').AuthenticationStore;
+  const store: AuthStore = {
+    async findUserByEmail(email) {
+      const row = await client.user.findUnique({ where: { email } });
+      return row ?? null;
+    },
+    async createUser(input) {
+      return client.user.create({ data: input });
+    },
+    async findMembershipsByUser(userId) {
+      return client.merchantMembership.findMany({ where: { userId } });
+    },
+    async findMembership(userId, merchantId) {
+      return client.merchantMembership.findUnique({
+        where: { userId_merchantId: { userId, merchantId } },
+      });
+    },
+    async createMembership(input) {
+      return client.merchantMembership.create({ data: input });
+    },
+    async createSession(input) {
+      return client.session.create({ data: input });
+    },
+    async findActiveSessionByTokenHash(tokenHash, now) {
+      const session = await client.session.findFirst({
+        where: { tokenHash, revokedAt: null, expiresAt: { gt: now } },
+        include: { user: { include: { memberships: true } } },
+      });
+      if (session === null) {
+        return null;
+      }
+      return {
+        session,
+        user: { id: session.user.id, email: session.user.email, passwordHash: session.user.passwordHash, createdAt: session.user.createdAt, updatedAt: session.user.updatedAt },
+        memberships: session.user.memberships.map((m) => ({ id: m.id, userId: m.userId, merchantId: m.merchantId, role: m.role })),
+      };
+    },
+    async revokeSession(tokenHash) {
+      await client.session.updateMany({
+        where: { tokenHash, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+    },
+  };
+  return store;
+}
