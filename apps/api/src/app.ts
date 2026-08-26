@@ -111,14 +111,15 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   );
 
   // Controlled recovery execution (Phase 6): disabled by default. The
-  // provider is constructed only when a gateway endpoint is configured;
+  // provider is constructed only when Razorpay credentials are configured;
   // otherwise the adapter deterministically reports not_configured.
   const executionProvider =
     options.executionProvider ??
     (env.RECOVERY_EXECUTION_PROVIDER === 'razorpay'
       ? new RazorpayRetryAdapter({
-          baseUrl: env.RECOVERY_EXECUTION_API_URL,
-          apiKey: env.RECOVERY_EXECUTION_API_KEY,
+          keyId: env.RAZORPAY_KEY_ID,
+          keySecret: env.RAZORPAY_KEY_SECRET,
+          baseUrl: env.RAZORPAY_BASE_URL,
           timeoutMs: env.RECOVERY_EXECUTION_TIMEOUT_MS,
         })
       : null);

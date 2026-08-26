@@ -5,29 +5,48 @@ import type {
 } from '../../domain/recovery-execution.js';
 
 export interface RazorpayExecutionConfig {
-  /** Gateway endpoint that accepts retry submissions; unset ⇒ not_configured. */
+  /** Razorpay Key ID (e.g. rzp_test_xxxxx). */
+  keyId?: string;
+  /** Razorpay Key Secret. NEVER logged or persisted. */
+  keySecret?: string;
+  /** Razorpay API base URL; defaults to https://api.razorpay.com. */
   baseUrl?: string;
-  apiKey?: string;
   timeoutMs: number;
 }
 
-interface ProviderRetryResponse {
+interface RazorpayOrderResponse {
+  id?: unknown;
+  entity?: unknown;
+  amount?: unknown;
+  currency?: unknown;
   status?: unknown;
-  reference_id?: unknown;
-  error_code?: unknown;
-  error_description?: unknown;
 }
 
+interface RazorpayErrorResponse {
+  error?: {
+    code?: unknown;
+    description?: unknown;
+    reason?: unknown;
+  };
+}
+
+const DEFAULT_BASE_URL = 'https://api.razorpay.com';
+
 /**
- * HTTP adapter for the RETRY capability against a configurable gateway
- * endpoint (Razorpay's public API does not expose a direct merchant-initiated
- * payment-retry operation, so the target is an explicitly configured gateway
- * URL; without configuration this adapter deterministically reports
- * `unavailable/not_configured` instead of pretending success).
+ * Real Razorpay integration for recovery execution.
  *
- * Responses are normalized to accepted/rejected/unavailable — raw provider
- * payloads never cross this boundary, and no credentials are ever logged or
- * persisted.
+ * Uses the Razorpay Orders API (POST /v1/orders) to create a new order for
+ * each retry attempt. The order ID is returned as the provider reference,
+ * which the frontend can use to open Razorpay Checkout for the customer.
+ *
+ * Authentication: Basic Auth with key_id:key_secret (base64 encoded).
+ *
+ * Idempotency: The receipt field uses the execution ID, which Razorpay
+ * treats as an idempotency key — duplicate requests with the same receipt
+ * are rejected with a 400 (duplicate_request_error).
+ *
+ * Provider acceptance means an order was created, NOT that payment was
+ * recovered. Only the captured-payment webhook flow confirms recovery.
  */
 export class RazorpayRetryAdapter implements RecoveryExecutionProvider {
   readonly provider = 'razorpay';
@@ -35,28 +54,37 @@ export class RazorpayRetryAdapter implements RecoveryExecutionProvider {
   constructor(private readonly config: RazorpayExecutionConfig) {}
 
   async retryPayment(request: RetryPaymentRequest): Promise<RetryPaymentResult> {
-    const { baseUrl, apiKey } = this.config;
-    if (baseUrl === undefined || apiKey === undefined) {
+    const { keyId, keySecret } = this.config;
+    if (keyId === undefined || keySecret === undefined) {
       return {
         kind: 'unavailable',
-        reason: 'not_configured: no recovery execution gateway is configured',
+        reason: 'not_configured: Razorpay API credentials are not configured',
       };
     }
 
+    const baseUrl = (this.config.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
+    const authHeader = `Basic ${btoa(`${keyId}:${keySecret}`)}`;
+
     let response: Response;
     try {
-      response = await fetch(`${baseUrl.replace(/\/+$/, '')}/retries`, {
+      response = await fetch(`${baseUrl}/v1/orders`, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          authorization: `Basic ${btoa(`${apiKey}:`)}`,
+          authorization: authHeader,
         },
         body: JSON.stringify({
-          reference_id: request.executionId,
-          payment_id: request.providerPaymentId,
-          order_id: request.providerOrderId,
           amount: request.amount,
           currency: request.currency,
+          // receipt is used as idempotency key — Razorpay rejects duplicates
+          receipt: request.executionId,
+          notes: {
+            opportunity_id: request.opportunityId,
+            original_payment_id: request.providerPaymentId,
+            ...(request.providerOrderId !== null
+              ? { original_order_id: request.providerOrderId }
+              : {}),
+          },
         }),
         signal: AbortSignal.timeout(this.config.timeoutMs),
       });
@@ -70,31 +98,60 @@ export class RazorpayRetryAdapter implements RecoveryExecutionProvider {
     if (response.status === 429) {
       return { kind: 'unavailable', reason: 'rate_limited' };
     }
-    if (!response.ok) {
-      // Normalize provider rejections without surfacing internals.
-      const body = await safeBody(response);
+
+    // Razorpay uses 400 for auth failures (BAD_REQUEST_ERROR with
+    // code=BAD_REQUEST_ERROR, description="Authentication failed")
+    if (response.status === 401) {
       return {
         kind: 'rejected',
-        failureCode: asString(body?.error_code) ?? `provider_http_${response.status}`,
-        failureReason:
-          asString(body?.error_description) ?? 'The provider rejected the retry request.',
+        failureCode: 'AUTHENTICATION_FAILED',
+        failureReason: 'Razorpay API credentials are invalid or expired.',
       };
     }
 
-    const body = await safeBody(response);
-    if (body === null || typeof asString(body.reference_id) !== 'string') {
+    if (!response.ok) {
+      const body = await safeParseError(response);
+      // Duplicate receipt — order already exists for this execution
+      if (body?.error?.code === 'BAD_REQUEST_ERROR' &&
+          typeof body.error.description === 'string' &&
+          body.error.description.includes('Duplicate')) {
+        return {
+          kind: 'rejected',
+          failureCode: 'DUPLICATE_EXECUTION',
+          failureReason: 'An order for this execution already exists.',
+        };
+      }
       return {
-        kind: 'unavailable',
-        reason: 'invalid_response: provider response missing reference id',
+        kind: 'rejected',
+        failureCode: asString(body?.error?.code) ?? `provider_http_${response.status}`,
+        failureReason:
+          asString(body?.error?.description) ?? 'The provider rejected the order creation.',
       };
     }
-    return { kind: 'accepted', providerReferenceId: asString(body.reference_id)! };
+
+    const body = await safeParseOrder(response);
+    if (body === null || typeof body.id !== 'string') {
+      return {
+        kind: 'unavailable',
+        reason: 'invalid_response: provider response missing order id',
+      };
+    }
+
+    return { kind: 'accepted', providerReferenceId: body.id };
   }
 }
 
-async function safeBody(response: Response): Promise<ProviderRetryResponse | null> {
+async function safeParseError(response: Response): Promise<RazorpayErrorResponse | null> {
   try {
-    return (await response.json()) as ProviderRetryResponse;
+    return (await response.json()) as RazorpayErrorResponse;
+  } catch {
+    return null;
+  }
+}
+
+async function safeParseOrder(response: Response): Promise<RazorpayOrderResponse | null> {
+  try {
+    return (await response.json()) as RazorpayOrderResponse;
   } catch {
     return null;
   }

@@ -63,9 +63,15 @@ export const envSchema = z.object({
   RECOVERY_EXECUTION_MAX_RETRIES: z.coerce.number().int().min(1).max(10).default(3),
   RECOVERY_EXECUTION_TIMEOUT_MS: z.coerce.number().int().min(250).max(60_000).default(5000),
   RECOVERY_EXECUTION_PROVIDER: emptyToUndefined(z.enum(['razorpay']).optional()),
-  /** Gateway endpoint for retry submission; unset ⇒ provider reports not_configured. */
-  RECOVERY_EXECUTION_API_URL: emptyToUndefined(z.url().optional()),
-  RECOVERY_EXECUTION_API_KEY: emptyToUndefined(z.string().min(1).optional()),
+  // Razorpay API credentials for recovery execution. The adapter uses
+  // Basic Auth with key_id:key_secret against https://api.razorpay.com/v1/orders.
+  // These are SEPARATE from the webhook secret (RAZORPAY_WEBHOOK_SECRET above).
+  /** Razorpay Key ID (e.g. rzp_test_xxxxx). Required when provider=razorpay. */
+  RAZORPAY_KEY_ID: emptyToUndefined(z.string().min(1).optional()),
+  /** Razorpay Key Secret. Required when provider=razorpay. NEVER logged or persisted. */
+  RAZORPAY_KEY_SECRET: emptyToUndefined(z.string().min(1).optional()),
+  /** Razorpay API base URL override; defaults to https://api.razorpay.com. */
+  RAZORPAY_BASE_URL: emptyToUndefined(z.url().optional()),
   // ---------------------------------------------------------------------------
   // Recovery operations & automation (Phase 7) -- DISABLED by default. The
   // scheduler reuses the Phase 6 execution pipeline and safety gate verbatim.
@@ -114,14 +120,17 @@ export const envSchema = z.object({
       }
     }
   }
-  // A configured provider endpoint requires credentials so provider calls can
-  // never silently go out unauthenticated.
-  if (env.RECOVERY_EXECUTION_API_URL !== undefined && env.RECOVERY_EXECUTION_API_KEY === undefined) {
-    ctx.addIssue({
-      code: 'custom',
-      path: ['RECOVERY_EXECUTION_API_KEY'],
-      message: 'Required when RECOVERY_EXECUTION_API_URL is set',
-    });
+  // Razorpay provider requires API credentials for Basic Auth.
+  if (env.RECOVERY_EXECUTION_PROVIDER === 'razorpay') {
+    for (const field of ['RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET'] as const) {
+      if (env[field] === undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [field],
+          message: `Required when RECOVERY_EXECUTION_PROVIDER=razorpay`,
+        });
+      }
+    }
   }
 });
 
