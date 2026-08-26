@@ -9,6 +9,7 @@ import {
   type DecisionPriority,
   type RecoveryOpportunityType,
 } from '@/lib/api/opportunities';
+import { getAIAdvice, type AIAvailableAdvice, type AIAdviceState } from '@/lib/api/ai-advice';
 import { formatMinorAmount } from '@/lib/format';
 
 export const dynamic = 'force-dynamic';
@@ -91,7 +92,10 @@ export default async function RecoveryCaseDetailPage({
     notFound();
   }
 
-  const decision = await getOpportunityDecision(id);
+  const [decision, aiAdvice] = await Promise.all([
+    getOpportunityDecision(id),
+    getAIAdvice(id),
+  ]);
 
   return (
     <>
@@ -251,10 +255,148 @@ export default async function RecoveryCaseDetailPage({
                 </table>
               </div>
             </SectionCard>
+
+            <AIIntelligenceSection
+              advice={aiAdvice === null ? 'unreachable' : aiAdvice.ai}
+              decisionAction={decision.recommendedAction}
+            />
           </>
         )}
       </div>
     </>
+  );
+}
+
+function AIIntelligenceSection({
+  advice,
+  decisionAction,
+}: {
+  advice: AIAdviceState | 'unreachable';
+  decisionAction: string;
+}) {
+  const advisoryNote =
+    'AI explanations are advisory and cannot override the deterministic safety decision.';
+
+  if (advice === 'unreachable') {
+    return (
+      <SectionCard title="AI Recovery Intelligence" subtitle="AI ASSISTED EXPLANATION">
+        <EmptyState
+          title="AI assistance is temporarily unavailable."
+          message="The deterministic recovery decision remains valid."
+        />
+      </SectionCard>
+    );
+  }
+
+  if (advice.status === 'disabled') {
+    return (
+      <SectionCard title="AI Recovery Intelligence" subtitle="AI ASSISTED EXPLANATION">
+        <EmptyState
+          title="AI assistance is disabled."
+          message="Deterministic recovery analysis remains active."
+        />
+      </SectionCard>
+    );
+  }
+
+  if (advice.status === 'unavailable') {
+    return (
+      <SectionCard title="AI Recovery Intelligence" subtitle="AI ASSISTED EXPLANATION">
+        <EmptyState title={advice.message} message={advisoryNote} />
+      </SectionCard>
+    );
+  }
+
+  return <AvailableAISection advice={advice} decisionAction={decisionAction} advisoryNote={advisoryNote} />;
+}
+
+function AvailableAISection({
+  advice,
+  decisionAction,
+  advisoryNote,
+}: {
+  advice: AIAvailableAdvice;
+  decisionAction: string;
+  advisoryNote: string;
+}) {
+  return (
+    <SectionCard
+      title="AI Recovery Intelligence"
+      subtitle={`AI ASSISTED EXPLANATION · ${advice.provider}/${advice.model} · advisor ${advice.advisorVersion}`}
+    >
+      {advice.safetyConstrained && (
+        <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-900">
+          The AI response contained suggestions that conflict with the authoritative
+          safety decision ({decisionAction}). The deterministic decision stands; the
+          constrained suggestions are not actionable.
+        </div>
+      )}
+
+      <p className="text-sm leading-relaxed text-slate-800">{advice.summary}</p>
+
+      <div className="mt-4 grid gap-6 lg:grid-cols-2">
+        <div>
+          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Explanation</p>
+          <p className="mt-1.5 text-xs leading-relaxed text-slate-600">{advice.explanation}</p>
+          <p className="mt-3 text-xs font-medium uppercase tracking-wide text-slate-500">
+            Suggested operational next step
+          </p>
+          <p className="mt-1.5 text-xs leading-relaxed text-slate-600">{advice.nextStep}</p>
+        </div>
+        <div>
+          {advice.operatorMessage !== null && (
+            <>
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                Operator note
+              </p>
+              <p className="mt-1.5 rounded-lg bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600 ring-1 ring-inset ring-slate-200">
+                {advice.operatorMessage}
+              </p>
+            </>
+          )}
+          {advice.customerMessage !== null && (
+            <>
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                Draft customer message
+              </p>
+              <p className="mt-1.5 rounded-lg bg-indigo-50/60 px-3 py-2 text-xs leading-relaxed text-slate-700 ring-1 ring-inset ring-indigo-100">
+                {advice.customerMessage}{' '}
+                <span className="text-[11px] text-slate-400">(AI draft — review before sending)</span>
+              </p>
+            </>
+          )}
+          <p className="mt-3 text-xs font-medium uppercase tracking-wide text-slate-500">
+            AI confidence
+          </p>
+          <p className="mt-1.5 text-xs leading-relaxed text-slate-600">
+            {advice.confidence}% — self-reported analysis confidence only; it does not
+            alter the deterministic score or recommendation.
+          </p>
+        </div>
+      </div>
+
+      {(advice.warnings.length > 0 || !advice.safetyConstrained) && (
+        <div className="mt-5">
+          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Warnings</p>
+          {advice.warnings.length === 0 ? (
+            <p className="mt-1.5 text-xs text-emerald-700">No warnings raised by this analysis.</p>
+          ) : (
+            <ul className="mt-1.5 space-y-1.5">
+              {advice.warnings.map((warning, index) => (
+                <li key={index} className="flex gap-2 text-xs leading-relaxed text-slate-600">
+                  <span aria-hidden className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-amber-400" />
+                  {warning}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      <p className="mt-5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-500">
+        {advisoryNote}
+      </p>
+    </SectionCard>
   );
 }
 

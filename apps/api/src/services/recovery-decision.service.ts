@@ -100,6 +100,22 @@ export class RecoveryDecisionService {
     return this.decisions.overviewMetrics(merchantId);
   }
 
+  /**
+   * Opportunity + extracted features for downstream consumers (e.g. the AI
+   * advisor's minimized input). Reuses the same deterministic extraction the
+   * scoring pipeline uses; returns null when the opportunity does not exist.
+   */
+  async featuresForOpportunity(
+    opportunityId: string
+  ): Promise<{ opportunity: RecoveryOpportunityRow; features: DecisionFeatures } | null> {
+    const opportunity = await this.opportunities.findById(opportunityId);
+    if (opportunity === null) {
+      return null;
+    }
+    const features = await this.extractFeatures(opportunity, new Date());
+    return { opportunity, features };
+  }
+
   /** Batch convenience: evaluate many opportunities in order. */
   async evaluateMany(opportunityIds: readonly string[]): Promise<EvaluationOutcome[]> {
     const outcomes: EvaluationOutcome[] = [];

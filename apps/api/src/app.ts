@@ -14,6 +14,8 @@ import { webhookRoutes } from './routes/webhooks.js';
 import { RecoveryOpportunityRepository } from './repositories/recovery-opportunity.repository.js';
 import { RecoveryDecisionRepository } from './repositories/recovery-decision.repository.js';
 import { RecoveryDecisionService } from './services/recovery-decision.service.js';
+import { RecoveryAIAdvisorService } from './services/recovery-ai-advisor.service.js';
+import { OpenAICompatibleAdvisor } from './ai/providers/openai-compatible.js';
 
 export interface BuildAppOptions {
   env?: AppEnv;
@@ -49,13 +51,38 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   app.decorate('opportunities', new RecoveryOpportunityRepository(db.recoveryOpportunity));
   const decisionRepository = new RecoveryDecisionRepository(db.recoveryDecision);
   app.decorate('decisions', decisionRepository);
+  const decisionService = new RecoveryDecisionService(
+    app.opportunities,
+    decisionRepository,
+    db.paymentEvent,
+    { windowMs: env.DETECTION_WINDOW_HOURS * 60 * 60 * 1000 }
+  );
+  app.decorate('decisionService', decisionService);
+
+  // AI advisory layer (Phase 5): constructed only when enabled; every failure
+  // path degrades to an explicit unavailable state inside the service.
+  const advisor = env.AI_ENABLED
+    ? new OpenAICompatibleAdvisor({
+        provider: env.AI_PROVIDER ?? 'openai-compatible',
+        model: env.AI_MODEL ?? '',
+        apiKey: env.AI_API_KEY ?? '',
+        baseUrl: env.AI_BASE_URL ?? '',
+        timeoutMs: env.AI_TIMEOUT_MS,
+      })
+    : null;
   app.decorate(
-    'decisionService',
-    new RecoveryDecisionService(
-      app.opportunities,
-      decisionRepository,
-      db.paymentEvent,
-      { windowMs: env.DETECTION_WINDOW_HOURS * 60 * 60 * 1000 }
+    'aiAdvisorService',
+    new RecoveryAIAdvisorService(
+      decisionService,
+      db.recoveryAIAdvice,
+      advisor,
+      {
+        enabled: env.AI_ENABLED,
+        provider: env.AI_PROVIDER ?? 'openai-compatible',
+        model: env.AI_MODEL ?? 'unavailable',
+        advisorVersion: env.AI_ADVISOR_VERSION,
+      },
+      app.log
     )
   );
 

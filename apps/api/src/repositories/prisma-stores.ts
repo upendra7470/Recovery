@@ -19,6 +19,11 @@ import type {
   RecoveryDecisionRow,
   RecoveryDecisionStore,
 } from '../domain/recovery-decision.js';
+import type {
+  AIAdviceStatus,
+  RecoveryAIAdviceRow,
+  RecoveryAIAdviceStore,
+} from '../domain/recovery-ai-advice.js';
 
 /**
  * Prisma-backed implementations of the ingestion/detection store boundaries.
@@ -297,6 +302,76 @@ export function createPrismaRecoveryDecisionStore(client: PrismaClient): Recover
         ...(merchantId !== undefined ? { where: { merchantId } } : {}),
       });
       return aggregated._avg.confidence ?? null;
+    },
+  };
+}
+
+/**
+ * Serialization boundary for AI advice (warnings JSON column). All content
+ * under this key was written by this store from typed string arrays.
+ */
+function toAdviceRow(row: {
+  id: string;
+  merchantId: string | null;
+  opportunityId: string;
+  decisionId: string;
+  provider: string;
+  model: string;
+  advisorVersion: string;
+  promptVersion: string;
+  status: AIAdviceStatus;
+  summary: string;
+  explanation: string;
+  nextStep: string;
+  customerMessage: string | null;
+  operatorMessage: string | null;
+  confidence: number;
+  warnings: unknown;
+  safetyConstrained: boolean;
+  decisionFingerprint: string;
+  createdAt: Date;
+  updatedAt: Date;
+}): RecoveryAIAdviceRow {
+  return { ...row, warnings: row.warnings as string[] };
+}
+
+export function createPrismaRecoveryAIAdviceStore(
+  client: PrismaClient
+): RecoveryAIAdviceStore {
+  return {
+    async upsert(data) {
+      const row = await client.recoveryAIAdvice.upsert({
+        where: {
+          decisionId_advisorVersion_model: {
+            decisionId: data.decisionId,
+            advisorVersion: data.advisorVersion,
+            model: data.model,
+          },
+        },
+        create: { ...data, warnings: data.warnings },
+        update: {
+          status: data.status,
+          summary: data.summary,
+          explanation: data.explanation,
+          nextStep: data.nextStep,
+          customerMessage: data.customerMessage,
+          operatorMessage: data.operatorMessage,
+          confidence: data.confidence,
+          warnings: data.warnings,
+          safetyConstrained: data.safetyConstrained,
+          decisionFingerprint: data.decisionFingerprint,
+          merchantId: data.merchantId,
+        },
+      });
+      return toAdviceRow(row);
+    },
+    async findByDecision({ decisionId, advisorVersion, model }) {
+      const row = await client.recoveryAIAdvice.findUnique({
+        where: {
+          decisionId_advisorVersion_model: { decisionId, advisorVersion, model },
+        },
+      });
+      return row ? toAdviceRow(row) : null;
     },
   };
 }

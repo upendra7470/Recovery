@@ -69,6 +69,12 @@ enum RecommendedAction {
   NO_ACTION
 }
 
+/// Lifecycle of stored AI advice. Only AVAILABLE rows are persisted today.
+/// Mirrors AIAdviceStatus in src/domain/recovery-ai-advice.ts.
+enum AIAdviceStatus {
+  AVAILABLE
+}
+
 model Merchant {
   id              String                @id @default(uuid()) @db.Uuid
   name            String
@@ -78,6 +84,7 @@ model Merchant {
   paymentEvents   PaymentEvent[]
   opportunities   RecoveryOpportunity[]
   decisions       RecoveryDecision[]
+  aiAdvice        RecoveryAIAdvice[]
 
   @@map("merchants")
 }
@@ -166,6 +173,7 @@ model RecoveryOpportunity {
   sourceEvent       PaymentEvent              @relation("OpportunitySourceEvent", fields: [sourceEventId], references: [id], onDelete: Cascade)
   recoveryEvent     PaymentEvent?             @relation("OpportunityRecoveryEvent", fields: [recoveryEventId], references: [id], onDelete: SetNull)
   decisions         RecoveryDecision[]
+  aiAdvice          RecoveryAIAdvice[]
 
   /// Idempotency: one opportunity per (source event, detection category).
   @@unique([sourceEventId, type])
@@ -205,6 +213,7 @@ model RecoveryDecision {
   updatedAt         DateTime           @updatedAt
   merchant          Merchant?          @relation(fields: [merchantId], references: [id], onDelete: SetNull)
   opportunity       RecoveryOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  aiAdvice          RecoveryAIAdvice[]
 
   /// One current decision per (opportunity, engine version); re-evaluation
   /// upserts. Append-only decision history is a future extension.
@@ -213,4 +222,44 @@ model RecoveryDecision {
   @@index([priority])
   @@index([recommendedAction])
   @@map("recovery_decisions")
+}
+
+model RecoveryAIAdvice {
+  id                String        @id @default(uuid()) @db.Uuid
+  merchantId        String?       @db.Uuid
+  opportunityId     String        @db.Uuid
+  /// The deterministic decision this advice was generated against.
+  decisionId        String        @db.Uuid
+  /// Informational provider label (e.g. "openai-compatible"). Never secrets.
+  provider          String
+  model             String
+  advisorVersion    String
+  promptVersion     String
+  status            AIAdviceStatus @default(AVAILABLE)
+  summary           String
+  explanation       String
+  nextStep          String
+  customerMessage   String?
+  operatorMessage   String?
+  /// Model self-reported confidence (0–100), clamped at the boundary. NOT a
+  /// success probability and never mixed with the deterministic confidence.
+  confidence        Int
+  warnings          Json
+  /// True when the deterministic safety guard constrained unsafe model text.
+  safetyConstrained Boolean       @default(false)
+  /// SHA-256 of the decision's safety-relevant content at generation time;
+  /// mismatch ⇒ stale advice ⇒ regenerate on next read.
+  decisionFingerprint String
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  merchant          Merchant?     @relation(fields: [merchantId], references: [id], onDelete: SetNull)
+  opportunity       RecoveryOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  decision          RecoveryDecision    @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+
+  /// One current advice per (deterministic decision, advisor version, model);
+  /// regeneration upserts. Raw provider responses are never stored.
+  @@unique([decisionId, advisorVersion, model])
+  @@index([merchantId])
+  @@index([opportunityId])
+  @@map("recovery_ai_advice")
 }

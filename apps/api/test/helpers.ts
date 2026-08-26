@@ -21,6 +21,15 @@ import type {
   RecoveryDecisionRow,
   RecoveryDecisionStore,
 } from '../src/domain/recovery-decision.js';
+import type {
+  NewRecoveryAIAdviceData,
+  RecoveryAIAdviceRow,
+  RecoveryAIAdviceStore,
+  RecoveryAIAdvisor,
+  AIAdvisorResult,
+  RecoveryAIAdviceRequest,
+  RecoveryAIAdviceContent,
+} from '../src/domain/recovery-ai-advice.js';
 import type { AppDatabase } from '../src/lib/database.js';
 
 export function makeTestEnv(overrides: Partial<Record<keyof AppEnv, string>> = {}): AppEnv {
@@ -57,6 +66,18 @@ export function createDbExecutorMock(
       overrides.recoveryOpportunity ?? createRecoveryOpportunityStoreMock(),
     recoveryDecision:
       overrides.recoveryDecision ?? createRecoveryDecisionStoreMock(),
+    recoveryAIAdvice:
+      overrides.recoveryAIAdvice ?? createRecoveryAIAdviceStoreMock(),
+  };
+}
+
+export function createRecoveryAIAdviceStoreMock(
+  overrides: Partial<RecoveryAIAdviceStore> = {}
+): RecoveryAIAdviceStore {
+  return {
+    upsert: vi.fn(async (data: NewRecoveryAIAdviceData) => sampleAdviceRow(data)),
+    findByDecision: vi.fn(async (): Promise<RecoveryAIAdviceRow | null> => null),
+    ...overrides,
   };
 }
 
@@ -173,8 +194,7 @@ export class InMemoryRecoveryDecisionStore implements RecoveryDecisionStore {
   }
 }
 
-function sampleDecisionRow(overrides: Partial<RecoveryDecisionRow> = {}): RecoveryDecisionRow {
-  return {
+function sampleDecisionRow(overrides: Partial<RecoveryDecisionRow> = {}): RecoveryDecisionRow {  return {
     id: randomUUID(),
     merchantId: null,
     opportunityId: randomUUID(),
@@ -529,4 +549,147 @@ function opportunityKey(sourceEventId: string, type: string): string {
 
 function decisionKey(opportunityId: string, engineVersion: string): string {
   return `${opportunityId}:${engineVersion}`;
+}
+
+function sampleAdviceRow(overrides: Partial<RecoveryAIAdviceRow> = {}): RecoveryAIAdviceRow {
+  return {
+    id: randomUUID(),
+    merchantId: null,
+    opportunityId: randomUUID(),
+    decisionId: randomUUID(),
+    provider: 'fake',
+    model: 'fake-model',
+    advisorVersion: 'v1',
+    promptVersion: 'v1',
+    status: 'AVAILABLE',
+    summary: 'Sample AI summary.',
+    explanation: 'Sample AI explanation with sufficient length for validation.',
+    nextStep: 'Proceed per the authoritative decision.',
+    customerMessage: null,
+    operatorMessage: null,
+    confidence: 70,
+    warnings: [],
+    safetyConstrained: false,
+    decisionFingerprint: 'fingerprint-placeholder',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  };
+}
+
+/**
+ * In-memory RecoveryAIAdviceStore enforcing the database's
+ * (decision_id, advisor_version, model) uniqueness with upsert semantics.
+ */
+export class InMemoryRecoveryAIAdviceStore implements RecoveryAIAdviceStore {
+  readonly rows = new Map<string, RecoveryAIAdviceRow>();
+  upsertCalls: NewRecoveryAIAdviceData[] = [];
+
+  async upsert(data: NewRecoveryAIAdviceData): Promise<RecoveryAIAdviceRow> {
+    this.upsertCalls.push(data);
+    const key = adviceKey(data.decisionId, data.advisorVersion, data.model);
+    const existing = this.rows.get(key);
+    if (existing !== undefined) {
+      const updated: RecoveryAIAdviceRow = {
+        ...existing,
+        summary: data.summary,
+        explanation: data.explanation,
+        nextStep: data.nextStep,
+        customerMessage: data.customerMessage,
+        operatorMessage: data.operatorMessage,
+        confidence: data.confidence,
+        warnings: [...data.warnings],
+        safetyConstrained: data.safetyConstrained,
+        decisionFingerprint: data.decisionFingerprint,
+        merchantId: data.merchantId,
+        updatedAt: new Date(),
+      };
+      this.rows.set(key, updated);
+      return updated;
+    }
+    const row: RecoveryAIAdviceRow = {
+      ...data,
+      id: randomUUID(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.rows.set(key, row);
+    return row;
+  }
+
+  async findByDecision(args: {
+    decisionId: string;
+    advisorVersion: string;
+    model: string;
+  }): Promise<RecoveryAIAdviceRow | null> {
+    return this.rows.get(adviceKey(args.decisionId, args.advisorVersion, args.model)) ?? null;
+  }
+}
+
+/** Deterministic valid content builders for fake advisors/tests. */
+export function makeAdviceContent(
+  overrides: Partial<RecoveryAIAdviceContent> = {}
+): RecoveryAIAdviceContent {
+  return {
+    summary: 'Transient gateway failure shortly after checkout.',
+    explanation:
+      'The failure looks transient and the deterministic decision to retry is consistent with the observed evidence and low attempt count.',
+    nextStep: 'Schedule one retry within the standard backoff window.',
+    customerMessage: null,
+    operatorMessage: null,
+    confidence: 72,
+    warnings: [],
+    ...overrides,
+  };
+}
+
+type FakeAdvisorBehavior =
+  | { kind: 'success'; content?: Partial<RecoveryAIAdviceContent> }
+  | { kind: 'timeout' }
+  | { kind: 'rate_limited' }
+  | { kind: 'provider_error' }
+  | { kind: 'network_error' }
+  | { kind: 'invalid_response_malformed_json' }
+  | { kind: 'invalid_response_schema' }
+  | { kind: 'throw' };
+
+/**
+ * Configurable deterministic fake advisor — lets tests simulate success,
+ * every unavailability mode, conflicting/unsafe text and malformed output
+ * without any network access or real provider.
+ */
+export class FakeAIRecoveryAdvisor implements RecoveryAIAdvisor {
+  readonly provider = 'fake';
+  calls: RecoveryAIAdviceRequest[] = [];
+
+  constructor(private behavior: FakeAdvisorBehavior = { kind: 'success' }) {}
+
+  setBehavior(behavior: FakeAdvisorBehavior): void {
+    this.behavior = behavior;
+  }
+
+  async advise(request: RecoveryAIAdviceRequest): Promise<AIAdvisorResult> {
+    this.calls.push(request);
+    switch (this.behavior.kind) {
+      case 'success':
+        return { status: 'available', content: makeAdviceContent(this.behavior.content) };
+      case 'timeout':
+        return { status: 'unavailable', reason: 'timeout' };
+      case 'rate_limited':
+        return { status: 'unavailable', reason: 'rate_limited' };
+      case 'provider_error':
+        return { status: 'unavailable', reason: 'provider_error' };
+      case 'network_error':
+        return { status: 'unavailable', reason: 'network_error' };
+      case 'invalid_response_malformed_json':
+      case 'invalid_response_schema':
+        return { status: 'unavailable', reason: 'invalid_response' };
+      case 'throw':
+        throw new Error('synthetic advisor crash');
+    }
+  }
+}
+
+function adviceKey(decisionId: string, advisorVersion: string, model: string): string {
+  return `${decisionId}:${advisorVersion}:${model}`;
 }

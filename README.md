@@ -7,13 +7,14 @@ understand where revenue is leaking, decide how to recover it safely, execute
 approved recovery actions, verify outcomes, and measure the revenue actually
 recovered.
 
-> **Status: Phase 4 — Intelligent recovery decision engine (deterministic, no AI APIs).**
-> RecoveryOS ingests Razorpay payment events, detects revenue leakage, and now
-> scores every opportunity with a transparent decision engine: priority,
-> confidence and a recommended next step — each fully explainable. It does
-> **not use any LLM or paid AI API**, does **not execute any recovery actions**,
-> and never invents monetary figures — every amount derives from stored payment
-> events in the provider's minor units.
+> **Status: Phase 5 — AI-assisted recovery intelligence (advisory, optional, provider-independent).**
+> RecoveryOS ingests Razorpay payment events, detects revenue leakage, and
+> scores every opportunity with a transparent deterministic decision engine.
+> Phase 5 adds an OPTIONAL AI layer that explains decisions in plain language
+> and drafts operator/customer communication. **AI is advisory and cannot
+> override deterministic payment recovery safety decisions.** No AI SDKs are
+> used; the provider is any OpenAI-compatible endpoint; everything works with
+> AI disabled.
 
 ---
 
@@ -29,7 +30,7 @@ manual follow-ups or blunt retry loops. RecoveryOS is being built to provide:
 - **Execution** – orchestrated recovery actions (retries, payment links, voice).
 - **Verification & measurement** – verified outcomes and true recovered-revenue reporting.
 
-## 2. Current phase scope (Phase 1–4)
+## 2. Current phase scope (Phase 1–5)
 
 Phase 1 delivered the application foundation:
 
@@ -83,10 +84,23 @@ LLMs — this is a heuristic model, not machine learning):
 | Read API | `GET /opportunities/:id/decision` (lazy first evaluation + staleness-aware re-evaluation) and `GET /decisions/overview` metrics; the opportunities list now carries an additive `decision` summary |
 | Dashboard | Recovery Cases rows show priority/score/confidence/recommendation; new case detail page explains WHY (score breakdown, factors table, risks, engine version) |
 
-Explicitly **not** implemented yet: AI/LLM decisions, recovery orchestration,
-automated retries or payment actions, customer messaging, analytics beyond the
-read APIs, synthetic data, simulation, policies, outcome-verification workflows,
-ledger, merchant memory, voice recovery, authentication.
+Phase 5 adds the optional AI-assisted intelligence layer (advisory only):
+
+| Area | Delivered |
+| --- | --- |
+| Provider abstraction | Narrow `RecoveryAIAdvisor` interface; `OpenAICompatibleAdvisor` works with any OpenAI-compatible endpoint (hosted gateways or local servers) via a small typed fetch client — no vendor SDKs |
+| Safety boundary | Advice schema has no score/priority/recommendation fields (nothing to override); a deterministic guard flags contradictory retry text, appends warnings and marks advice `safetyConstrained` |
+| Validation | Model output must parse as JSON and pass strict Zod validation (bounded text, integer confidence 0–100 — coercions rejected); malformed output degrades to `invalid_response`, never crashes the API |
+| Failure handling | Disabled/timeout/429/provider error/network failure/validation failure all return an explicit AI-unavailable state while the deterministic decision keeps working; no retry loops |
+| Data minimization | Only deliberately constructed fields are sent to the model: no PII, no payment instrument data, no raw payloads, no secrets |
+| Persistence & caching | `recovery_ai_advice` table keyed per (decision, advisor version, model) with a decision-content fingerprint — unchanged decisions reuse stored advice, changed decisions regenerate it |
+| API | `GET /opportunities/:id/ai-advice` returns `{ opportunityId, decision (always), ai: available \| disabled \| unavailable }` with safe reason codes only |
+| UI | "AI Recovery Intelligence" section on case detail: status states, summary/explanation/next step, draft customer + operator messages, AI confidence, warnings — visually subordinate to the deterministic decision |
+
+Explicitly **not** implemented yet: autonomous payments/retries/refunds/messaging,
+model training/fine-tuning, vector databases, RAG, agents, orchestration
+frameworks, policies engine, outcome-verification workflows, ledger, merchant
+memory, voice recovery, authentication.
 
 ## 3. Architecture
 
@@ -157,6 +171,11 @@ edit the generated files per environment. Never commit real `.env` files.
 | `RAZORPAY_WEBHOOK_SECRET` | API | Secret used to verify `X-Razorpay-Signature` (optional at config level; the webhook endpoint fails closed when unset) |
 | `DEFAULT_TEST_PAYMENT_ACCOUNT_ID` | API | Optional PaymentAccount UUID used to link local/test webhooks that carry no recognizable provider account id |
 | `DETECTION_WINDOW_HOURS` | API | Correlation window (1–720, default 24) used when deciding whether a failure was later recovered or an authorization expired |
+| `AI_ENABLED` | API | Master switch for the advisory AI layer (`true`/`false`, default `false`) |
+| `AI_PROVIDER` | API | Informational provider label persisted with advice |
+| `AI_MODEL` / `AI_API_KEY` / `AI_BASE_URL` | API | OpenAI-compatible chat-completions endpoint configuration (required when `AI_ENABLED=true`; placeholders only — never commit real keys) |
+| `AI_TIMEOUT_MS` | API | Hard advisor timeout (250–60000, default 5000); timeouts degrade to an AI-unavailable state |
+| `AI_ADVISOR_VERSION` | API | Version stamp persisted with every advice row (default `v1`) |
 | `NEXT_PUBLIC_APP_URL` | Web | Public URL of the dashboard |
 | `NEXT_PUBLIC_API_URL` | Web | Base URL of the API, called server-side for health |
 
@@ -216,6 +235,15 @@ reasons/factors/risk-flags JSON, evaluated timestamp and a `SET NULL` merchant
 relation plus cascade FK to the opportunity. Uniqueness on
 `(opportunity_id, engine_version)` makes re-evaluation an upsert; indexes on
 merchant/priority/action power the overview aggregates.
+
+Phase 5 adds `recovery_ai_advice` (migration
+`20260826023019_add_recovery_ai_advice`): one row per (decision, advisor
+version, model) storing summary/explanation/nextStep/customerMessage/
+operatorMessage, model confidence, warnings JSON, `safetyConstrained`, a
+SHA-256 decision-content fingerprint used for cache invalidation, and
+provider/model/advisorVersion/promptVersion stamps for auditability. Cascade
+FK to the deterministic decision, `SET NULL` merchant relation. Raw provider
+responses are never stored.
 
 ## 8. Running the application
 
@@ -363,6 +391,47 @@ GET /decisions/overview           → { criticalOpportunities, highPriorityOppor
 - Overview metrics honor the optional `merchantId` filter so counts never
   cross tenant boundaries.
 
+## 8.4 AI recovery intelligence (Phase 5 — advisory)
+
+```text
+DeterministicDecisionEngine (authoritative: score, priority, confidence,
+                             safety rules, risk flags, recommendation)
+        ↓
+Safety boundary (advice schema carries no overridable decision fields)
+        ↓
+AIRecoveryAdvisor (OpenAI-compatible; minimized input; JSON-only output)
+        ↓
+Zod validation → deterministic safety guard (contradiction warnings)
+        ↓
+Persisted advice (recovery_ai_advice) → GET /opportunities/:id/ai-advice
+```
+
+Key properties:
+
+- **Advisory only.** The model is never given a field to express a
+  recommendation, score or priority. If its text suggests retrying while the
+  deterministic action is `DO_NOT_RETRY`/`NO_ACTION` (or a hard-decline flag is
+  set), the guard appends an explicit warning and marks the advice
+  `safetyConstrained`; the decision itself is untouched.
+- **Optional by default.** With `AI_ENABLED=false` the endpoint returns a clean
+  `disabled` state and the whole product works unchanged.
+- **Failure-tolerant.** Timeout, rate limit (429), provider errors, network
+  failures and invalid model output each map to a stable reason code
+  (`timeout`, `rate_limited`, `provider_error`, `network_error`,
+  `invalid_response`). No retry loops; no raw provider errors or secrets in
+  responses.
+- **Cached & auditable.** Advice persists per (deterministic decision, advisor
+  version, model) with a SHA-256 fingerprint of the decision content.
+  Unchanged decisions reuse stored advice; changed decisions regenerate it.
+  `promptVersion` and `advisorVersion` are stored with every row.
+
+Local smoke test with AI disabled:
+
+```bash
+curl 'http://localhost:4000/opportunities/<opportunity-id>/ai-advice'
+# → { "decision": {...}, "ai": { "status": "disabled", ... } }
+```
+
 ## 9. Tests
 
 ```bash
@@ -391,7 +460,16 @@ behavior, safety routing (DO_NOT_RETRY / CUSTOMER_ACTION_REQUIRED / REVIEW /
 NO_ACTION), determinism, factor explainability, version stamping, service
 orchestration (lazy evaluation, staleness re-evaluation, tenant attribution),
 repository upsert semantics, decision route contracts (valid/missing/invalid
-UUID/overview scoping) and additive list summaries.
+UUID/overview scoping) and additive list summaries — and Phase 5 AI-boundary
+tests: provider success/fenced-JSON/timeout/429/500/network/malformed-JSON/
+invalid-schema/invalid-confidence handling (against stubbed fetch), the
+deterministic safety guard (AI retry text vs DO_NOT_RETRY, hard-decline flags,
+evidence-gap warnings, no manufactured certainty), service orchestration
+(disabled state, generation, cached reuse, stale regeneration on decision
+change, every failure fallback, advisor crashes, tenant attribution, minimized
+input), route contracts (generated/cached/disabled/unavailable states, 404/422,
+secret-leak prevention) — all with a deterministic fake advisor; no test ever
+touches a real AI provider.
 
 ## 10. Lint
 
@@ -420,24 +498,24 @@ npm run build       # compiles API to dist/ and builds the Next.js app
 
 ## 13. What is NOT implemented yet
 
-No AI/LLM usage of any kind (the decision engine is a deterministic heuristic
-model, not machine learning), no recovery execution of any kind — no payment
-retries, links, charges or customer messaging — no voice recovery, no merchant
-memory, no anomaly detection, no synthetic transactions or simulation, no
-analytics beyond the read APIs, no authentication, and no active recovery —
-`RECOVERED` status reflects only a customer-initiated successful retry observed
-in the event stream, never an action RecoveryOS took.
+No autonomous action of any kind — no payment retries, charges, refunds,
+emails, SMS or voice outreach — even when AI advice is enabled. The AI layer
+is advisory text generation only; it cannot execute anything and cannot
+override deterministic safety decisions. No model training/fine-tuning, no
+vector databases, no RAG pipelines, no agent frameworks, no anomaly detection,
+no synthetic transactions or simulation, no policies engine, no analytics
+beyond the read APIs, no authentication. `RECOVERED` status reflects only a
+customer-initiated successful retry observed in the event stream.
 
 ## 14. Planned future phases
 
 ~~Phase 2 Razorpay integration + webhook ingestion~~ (delivered) · ~~Phase 3
 revenue leakage detection~~ (delivered) · ~~Phase 4 deterministic decision
-engine~~ (delivered) · Phase 5 synthetic data + simulation + replay · Phase 6
-recovery intelligence/context/pattern engines + merchant memory · Phase 7 AI
-decision agent behind the existing engine interface (ML model trained on
-accumulated outcomes may replace or augment `DeterministicDecisionEngine`;
-the interface and feature extraction are already model-ready) · Phase 8
-policy/safety engine · Phase 9 recovery action orchestrator · Phase 10 outcome
-verification · Phase 11 recovery ledger · Phase 12 adaptive merchant memory ·
-Phase 13 recovery modules · Phase 14 Hinglish voice recovery · Phase 15 full
-merchant dashboard. Details: [docs/architecture.md](docs/architecture.md).
+engine~~ (delivered) · ~~Phase 5 AI-assisted intelligence~~ (delivered,
+advisory-only) · Phase 6 policy/safety engine (formal rules over decisions +
+advice before any orchestration exists) · Phase 7 recovery action orchestrator
+(human-approved execution; consumes recommendations + advice) · Phase 8 outcome
+verification · Phase 9 recovery ledger · Phase 10 synthetic data + simulation ·
+Phase 11 adaptive merchant memory · Phase 12 recovery modules · Phase 13
+Hinglish voice recovery · Phase 14 full merchant dashboard. Details:
+[docs/architecture.md](docs/architecture.md).

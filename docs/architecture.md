@@ -271,6 +271,60 @@ Key decisions:
 - **Tenant isolation.** Decisions inherit merchant/account attribution only
   from their opportunity; overview aggregates scope strictly by merchantId.
 
+## 5.4 AI-assisted recovery intelligence (Phase 5 — advisory)
+
+```
+Deterministic decision (authoritative)
+      │  score · priority · confidence · recommendation · risk flags
+      ▼
+Minimized input construction           services/recovery-ai-advisor.service.ts
+      │  opportunity type/amount/currency/status · failure category/code ·
+      │  retry count · historical rate (or explicit null) · the full
+      │  deterministic assessment as READ-ONLY context.
+      │  Never sent: PII, payment instruments, raw payloads, secrets.
+      ▼
+AIRecoveryAdvisor (interface)          ai/providers/openai-compatible.ts
+      │  any OpenAI-compatible chat-completions endpoint via a small typed
+      │  fetch client; strict AbortSignal timeout; no SDKs; no retries.
+      ▼
+Model output validation                domain/recovery-ai-advice.ts (Zod)
+      │  JSON-only contract; bounded strings; strictly numeric confidence
+      │  0–100 (no coercions). Any failure ⇒ { status: 'invalid_response' }.
+      ▼
+Deterministic safety guard             ai/safety.ts (pure)
+      │  detects contradictory retry suggestions vs DO_NOT_RETRY/NO_ACTION/
+      │  NON_RECOVERABLE_CONDITION → appends warnings + safetyConstrained;
+      │  annotates evidence gaps (missing failure code).
+      ▼
+Upsert persistence + reuse             recovery_ai_advice table
+      │  unique (decision_id, advisor_version, model); SHA-256 decision-
+      │  content fingerprint ⇒ cached advice reused while the deterministic
+      │  decision is unchanged, regenerated when it changes.
+      ▼
+GET /opportunities/:id/ai-advice       { decision (always), ai }
+      │  ai ∈ available | disabled | unavailable(reason) — reason codes are
+      │  stable and safe to render: timeout · rate_limited · provider_error ·
+      │  network_error · invalid_response · disabled.
+```
+
+Key decisions:
+
+- **> AI is advisory and cannot override deterministic payment recovery safety decisions.**
+  The advice schema structurally lacks score/priority/recommendation fields,
+  so the model has nothing to override with; free-text contradictions are
+  caught by the guard and surfaced as warnings, never as actions.
+- **Optional enhancement.** With `AI_ENABLED=false` (default) no advisor is
+  constructed at all. With it enabled, every failure mode (timeout, 429,
+  provider 5xx, network, malformed JSON, schema violation, advisor crash)
+  degrades to an explicit unavailable state — a decision is never lost and an
+  API request never fails because of AI.
+- **Provider-independent.** Only OpenAI-compatible HTTP semantics are spoken;
+  hosted gateways and local compatible servers work without code changes.
+- **Data minimization by construction.** The request object is built field by
+  field (`buildRequestFrom`); serialization of whole rows is impossible.
+- **Auditable.** provider, model, advisorVersion, promptVersion and a decision
+  fingerprint persist with every advice row; raw model responses do not.
+
 ## 6. Logging & observability
 
 Structured JSON logs via pino: ISO timestamps, level, `service:"recoveryos"`,
@@ -328,6 +382,14 @@ cascade FK to the opportunity, `SET NULL` merchant relation. Uniqueness on
 `(opportunity_id, engine_version)` makes re-evaluation an upsert; indexes on
 merchant/priority/action serve overview aggregates.
 
+Phase 5 added `recovery_ai_advice` (migration
+`20260826023019_add_recovery_ai_advice`): advisory AI output stored per
+`(decision_id, advisor_version, model)` — summary/explanation/nextStep/
+customerMessage/operatorMessage, model confidence (advisory metadata),
+warnings JSON, `safetyConstrained`, decision-content SHA-256 fingerprint for
+cache invalidation, provider/model/promptVersion stamps. Cascade FK to the
+decision; raw provider responses are never persisted.
+
 Later phases will add (non-exhaustive): simulation/replay datasets (P5),
 decisions + rationale + policy evaluations (P6–P8), recovery actions + attempts
 (P9), outcome verifications (P10), append-only recovery ledger entries (P11),
@@ -374,6 +436,7 @@ first data-bearing phase.
 | 2 ✅ | Razorpay webhooks | `routes/webhooks.ts` + `adapters/razorpay.ts` + `PaymentEventRepository` |
 | 3 ✅ | Revenue leakage detection | `detection/` rules + detector, `services/revenue-leakage.service.ts`, `RecoveryOpportunityRepository`, `routes/opportunities.ts` |
 | 4 ✅ | Decision engine | `decision/` engine + features + failure categories, `services/recovery-decision.service.ts`, `RecoveryDecisionRepository`, `routes/decisions.ts` |
+| 5 ✅ | AI advisory intelligence | `ai/` prompt + safety guard + OpenAI-compatible provider, `services/recovery-ai-advisor.service.ts`, `recovery_ai_advice` store, `/opportunities/:id/ai-advice` |
 | 5 | Simulation/replay | `services/simulation` reusing event normalization |
 | 6–8 | Intelligence/context/pattern/memory | `services/intelligence/*`, new repos |
 | 7 | AI decision agent | behind the existing decision-engine interface; deterministic fallbacks required |
