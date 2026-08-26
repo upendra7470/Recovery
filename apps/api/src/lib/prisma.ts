@@ -6,6 +6,7 @@ import {
   createPrismaPaymentEventStore,
   createPrismaRecoveryAIAdviceStore,
   createPrismaRecoveryDecisionStore,
+  createPrismaRecoveryExecutionStore,
   createPrismaRecoveryOpportunityStore,
 } from '../repositories/prisma-stores.js';
 
@@ -45,5 +46,6 @@ export function createAppDatabase(client: PrismaClient): AppDatabase {
     recoveryOpportunity: createPrismaRecoveryOpportunityStore(client),
     recoveryDecision: createPrismaRecoveryDecisionStore(client),
     recoveryAIAdvice: createPrismaRecoveryAIAdviceStore(client),
+    recoveryExecution: createPrismaRecoveryExecutionStore(client),
   };
 }

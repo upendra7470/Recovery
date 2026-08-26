@@ -10,6 +10,8 @@ import {
   type RecoveryOpportunityType,
 } from '@/lib/api/opportunities';
 import { getAIAdvice, type AIAvailableAdvice, type AIAdviceState } from '@/lib/api/ai-advice';
+import { getExecutions, type ExecutionSummary } from '@/lib/api/recovery-executions';
+import { ExecuteRecoveryButton } from './execute-recovery-button';
 import { formatMinorAmount } from '@/lib/format';
 
 export const dynamic = 'force-dynamic';
@@ -92,9 +94,10 @@ export default async function RecoveryCaseDetailPage({
     notFound();
   }
 
-  const [decision, aiAdvice] = await Promise.all([
+  const [decision, aiAdvice, executions] = await Promise.all([
     getOpportunityDecision(id),
     getAIAdvice(id),
+    getExecutions(id),
   ]);
 
   return (
@@ -260,10 +263,142 @@ export default async function RecoveryCaseDetailPage({
               advice={aiAdvice === null ? 'unreachable' : aiAdvice.ai}
               decisionAction={decision.recommendedAction}
             />
+
+            <ExecutionSection
+              opportunityId={id}
+              decisionAction={decision.recommendedAction}
+              list={executions}
+            />
           </>
         )}
       </div>
     </>
+  );
+}
+
+const STATUS_BADGE: Record<string, string> = {
+  PENDING: 'bg-slate-100 text-slate-600',
+  AUTHORIZED: 'bg-blue-50 text-blue-700',
+  EXECUTING: 'bg-indigo-50 text-indigo-700',
+  SUCCEEDED: 'bg-emerald-50 text-emerald-700',
+  FAILED: 'bg-rose-50 text-rose-700',
+  BLOCKED: 'bg-amber-50 text-amber-800',
+  CANCELLED: 'bg-slate-100 text-slate-500',
+};
+
+function ExecutionSection({
+  opportunityId,
+  decisionAction,
+  list,
+}: {
+  opportunityId: string;
+  decisionAction: string;
+  list: Awaited<ReturnType<typeof getExecutions>>;
+}) {
+  return (
+    <SectionCard
+      title="Recovery Execution"
+      subtitle="Controlled execution — governed by the deterministic safety policy"
+    >
+      {list === null ? (
+        <EmptyState
+          title="Execution status unavailable."
+          message="Could not load execution information. The deterministic recovery decision remains valid."
+        />
+      ) : (
+        <>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="rounded-lg border border-slate-200 bg-white px-4 py-3">
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                Deterministic decision (authoritative)
+              </p>
+              <p className="mt-1 text-sm font-semibold text-slate-900">{decisionAction}</p>
+            </div>
+            <div
+              className={`rounded-lg border px-4 py-3 ${
+                list.eligibility.eligible
+                  ? 'border-emerald-200 bg-emerald-50/60'
+                  : 'border-amber-200 bg-amber-50/60'
+              }`}
+            >
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                Execution eligibility
+              </p>
+              <p
+                className={`mt-1 text-sm font-semibold ${
+                  list.eligibility.eligible ? 'text-emerald-800' : 'text-amber-900'
+                }`}
+              >
+                {list.eligibility.eligible
+                  ? `Eligible (${list.eligibility.action})`
+                  : `Blocked — ${list.eligibility.reason?.replaceAll('_', ' ').toLowerCase()}`}
+              </p>
+              {list.eligibility.detail && (
+                <p className="mt-0.5 text-xs leading-relaxed text-slate-600">
+                  {list.eligibility.detail}
+                </p>
+              )}
+            </div>
+          </div>
+
+          {list.executions.length > 0 && (
+            <div className="mt-5 overflow-x-auto">
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
+                    <th className="px-4 pb-2 font-medium">Attempt</th>
+                    <th className="px-4 pb-2 font-medium">Status</th>
+                    <th className="hidden px-4 pb-2 font-medium md:table-cell">Provider</th>
+                    <th className="px-4 pb-2 font-medium">Requested</th>
+                    <th className="hidden px-4 pb-2 font-medium lg:table-cell">Failure</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {list.executions.map((execution) => (
+                    <ExecutionRow key={execution.id} execution={execution} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {list.eligibility.eligible ? (
+            <div className="mt-6">
+              <ExecuteRecoveryButton opportunityId={opportunityId} />
+            </div>
+          ) : (
+            <p className="mt-6 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-500">
+              Manual execution cannot override blocked decisions, recovered
+              opportunities or retry limits.
+            </p>
+          )}
+        </>
+      )}
+    </SectionCard>
+  );
+}
+
+function ExecutionRow({ execution }: { execution: ExecutionSummary }) {
+  return (
+    <tr className="border-b border-slate-100 last:border-b-0">
+      <td className="px-4 py-2.5 text-sm tabular-nums text-slate-700">#{execution.attempt}</td>
+      <td className="px-4 py-2.5">
+        <span
+          className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_BADGE[execution.status] ?? 'bg-slate-100 text-slate-600'}`}
+        >
+          {execution.status}
+        </span>
+      </td>
+      <td className="hidden px-4 py-2.5 font-mono text-xs text-slate-500 md:table-cell">
+        {execution.provider ?? '—'}
+      </td>
+      <td className="px-4 py-2.5 text-xs text-slate-500">{formatDate(execution.requestedAt)}</td>
+      <td className="hidden max-w-xs px-4 py-2.5 text-xs leading-relaxed text-slate-500 lg:table-cell">
+        {execution.failureCode !== null || execution.failureReason !== null
+          ? `${execution.failureCode ?? ''} ${execution.failureReason ?? ''}`.trim()
+          : '—'}
+      </td>
+    </tr>
   );
 }
 

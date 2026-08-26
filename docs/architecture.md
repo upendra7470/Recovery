@@ -325,6 +325,50 @@ Key decisions:
 - **Auditable.** provider, model, advisorVersion, promptVersion and a decision
   fingerprint persist with every advice row; raw model responses do not.
 
+## 5.5 Controlled recovery execution & outcome tracking (Phase 6)
+
+```
+fresh deterministic decision (stale-aware, Phase 4 service)
+      ↓
+Safety gate (pure)                    execution/../domain safety rules
+      │  action == RETRY (WAIT ⇒ scheduled PENDING only) · opportunity OPEN ·
+      │  payment not already captured · confidence ≥ minimum · no blocking
+      │  risk flag · attempts < limit · payment identifier present
+      ├─ blocked ⇒ auditable BLOCKED record + 409 EXECUTION_BLOCKED
+      ▼
+Idempotent execution record           recovery_executions
+      │  unique idempotency_key (opportunity+decision+action+attempt);
+      │  in-flight/accepted executions replay on duplicate requests
+      ▼
+State machine (pure)                  execution/state-machine.ts
+      │  PENDING→AUTHORIZED→EXECUTING→SUCCEEDED|FAILED
+      │  PENDING→BLOCKED|CANCELLED · AUTHORIZED→CANCELLED
+      ▼
+Provider capability                   execution/providers/razorpay-retry.adapter.ts
+      │  narrow retryPayment(...) — no generic execute(action); configurable
+      │  gateway endpoint; unconfigured ⇒ deterministic not_configured;
+      │  responses normalized to accepted/rejected/unavailable
+      ▼
+Outcome truth                         existing Phase 3 payment-event flow
+         provider ACCEPTANCE ≠ recovery; opportunities become RECOVERED only
+         when a captured payment event arrives through webhook ingestion
+```
+
+Key decisions:
+
+- **Manual ≠ override.** `POST /opportunities/:id/execute` runs the identical
+  fresh-decision → gate → execute pipeline as any future automation. Nothing
+  can bypass DO_NOT_RETRY, retry limits, recovered state or staleness.
+- **Acceptance ≠ recovery.** An execution's SUCCEEDED status means the provider
+  accepted the retry REQUEST. The UI says "Recovery request submitted —
+  awaiting payment outcome"; RECOVERED requires a real captured payment event.
+- **Duplicate-proof by construction.** The database-unique idempotency key plus
+  the in-flight/succeeded replay guard guarantee one provider operation per
+  logical attempt even under concurrent duplicate requests.
+- **Capability-scoped providers.** Only operations that pass the safety gate
+  have an interface method, so unsafe future actions cannot slip through
+  typing. Raw provider payloads and credentials never cross the boundary.
+
 ## 6. Logging & observability
 
 Structured JSON logs via pino: ISO timestamps, level, `service:"recoveryos"`,
@@ -390,6 +434,13 @@ warnings JSON, `safetyConstrained`, decision-content SHA-256 fingerprint for
 cache invalidation, provider/model/promptVersion stamps. Cascade FK to the
 decision; raw provider responses are never persisted.
 
+Phase 6 added `recovery_executions` (migration
+`20260826032642_add_recovery_executions`): execution status enum [PENDING|
+AUTHORIZED|EXECUTING|SUCCEEDED|FAILED|BLOCKED|CANCELLED] restricted by a pure
+state machine, unique `idempotency_key`, attempt counter, normalized failure
+code/reason, cascade FKs to opportunity and decision, `SET NULL` merchant,
+indexes on opportunity/merchant/decision/status/createdAt.
+
 Later phases will add (non-exhaustive): simulation/replay datasets (P5),
 decisions + rationale + policy evaluations (P6–P8), recovery actions + attempts
 (P9), outcome verifications (P10), append-only recovery ledger entries (P11),
@@ -423,6 +474,11 @@ Vitest, node environment, no live DB required for CI determinism:
   statistics wiring. Repository: upsert semantics, per-version rows, overview
   aggregates. Routes: valid/missing/malformed ids, honest zero states,
   merchantId scoping, additive list summaries.
+- Execution: safety-gate rule matrix, pure state-machine transitions,
+  provider adapter normalization against stubbed fetch, service orchestration
+  with a fake provider (single call per attempt, replays, disabled mode,
+  stale refresh, blocked audit rows, limits, tenant attribution), repository
+  idempotency/counting and route contracts (201/200/409/503).
 - Web: pure formatting logic (`formatInr`, `formatMinorAmount`, `formatPercent`).
 
 Integration-style tests against a live PostgreSQL run naturally during local
@@ -437,6 +493,7 @@ first data-bearing phase.
 | 3 ✅ | Revenue leakage detection | `detection/` rules + detector, `services/revenue-leakage.service.ts`, `RecoveryOpportunityRepository`, `routes/opportunities.ts` |
 | 4 ✅ | Decision engine | `decision/` engine + features + failure categories, `services/recovery-decision.service.ts`, `RecoveryDecisionRepository`, `routes/decisions.ts` |
 | 5 ✅ | AI advisory intelligence | `ai/` prompt + safety guard + OpenAI-compatible provider, `services/recovery-ai-advisor.service.ts`, `recovery_ai_advice` store, `/opportunities/:id/ai-advice` |
+| 6 ✅ | Controlled execution | `domain/recovery-execution.ts`, `execution/` safety + state machine + Razorpay retry adapter, `services/recovery-execution.service.ts`, `routes/executions.ts`, `recovery_executions` table |
 | 5 | Simulation/replay | `services/simulation` reusing event normalization |
 | 6–8 | Intelligence/context/pattern/memory | `services/intelligence/*`, new repos |
 | 7 | AI decision agent | behind the existing decision-engine interface; deterministic fallbacks required |

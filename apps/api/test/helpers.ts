@@ -30,6 +30,15 @@ import type {
   RecoveryAIAdviceRequest,
   RecoveryAIAdviceContent,
 } from '../src/domain/recovery-ai-advice.js';
+import type {
+  ExecutionStatus,
+  NewRecoveryExecutionData,
+  RecoveryExecutionRow,
+  RecoveryExecutionStore,
+  RecoveryExecutionProvider,
+  RetryPaymentRequest,
+  RetryPaymentResult,
+} from '../src/domain/recovery-execution.js';
 import type { AppDatabase } from '../src/lib/database.js';
 
 export function makeTestEnv(overrides: Partial<Record<keyof AppEnv, string>> = {}): AppEnv {
@@ -68,6 +77,24 @@ export function createDbExecutorMock(
       overrides.recoveryDecision ?? createRecoveryDecisionStoreMock(),
     recoveryAIAdvice:
       overrides.recoveryAIAdvice ?? createRecoveryAIAdviceStoreMock(),
+    recoveryExecution:
+      overrides.recoveryExecution ?? createRecoveryExecutionStoreMock(),
+  };
+}
+
+export function createRecoveryExecutionStoreMock(
+  overrides: Partial<RecoveryExecutionStore> = {}
+): RecoveryExecutionStore {
+  return {
+    insert: vi.fn(async (data: NewRecoveryExecutionData) => sampleExecutionRow(data)),
+    findByIdempotencyKey: vi.fn(async (): Promise<RecoveryExecutionRow | null> => null),
+    updateStatus: vi.fn(async ({ id }: { id: string; status: ExecutionStatus }) =>
+      sampleExecutionRow({ id })
+    ),
+    listByOpportunity: vi.fn(async (): Promise<RecoveryExecutionRow[]> => []),
+    findLatestByOpportunityAndAction: vi.fn(async (): Promise<RecoveryExecutionRow | null> => null),
+    countRetryAttempts: vi.fn(async () => 0),
+    ...overrides,
   };
 }
 
@@ -692,4 +719,142 @@ export class FakeAIRecoveryAdvisor implements RecoveryAIAdvisor {
 
 function adviceKey(decisionId: string, advisorVersion: string, model: string): string {
   return `${decisionId}:${advisorVersion}:${model}`;
+}
+
+function sampleExecutionRow(overrides: Partial<RecoveryExecutionRow> = {}): RecoveryExecutionRow {
+  return {
+    id: randomUUID(),
+    merchantId: null,
+    opportunityId: randomUUID(),
+    decisionId: randomUUID(),
+    action: 'RETRY',
+    status: 'PENDING',
+    attempt: 1,
+    idempotencyKey: `key-${randomUUID()}`,
+    provider: null,
+    providerPaymentId: 'pay_sample',
+    requestedAt: new Date(),
+    startedAt: null,
+    completedAt: null,
+    failureCode: null,
+    failureReason: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  };
+}
+
+/**
+ * In-memory RecoveryExecutionStore enforcing the database's unique
+ * `idempotency_key` constraint so duplicate-execution tests behave exactly
+ * like PostgreSQL without a live database.
+ */
+export class InMemoryRecoveryExecutionStore implements RecoveryExecutionStore {
+  readonly rows = new Map<string, RecoveryExecutionRow>();
+
+  async insert(data: NewRecoveryExecutionData): Promise<RecoveryExecutionRow> {
+    if (this.rows.has(data.idempotencyKey)) {
+      throw new Prisma.PrismaClientKnownRequestError(
+        'Unique constraint failed on the fields (idempotencyKey)',
+        { code: 'P2002', clientVersion: 'test' }
+      );
+    }
+    const row: RecoveryExecutionRow = {
+      ...data,
+      id: randomUUID(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.rows.set(data.idempotencyKey, row);
+    return row;
+  }
+
+  async findByIdempotencyKey(idempotencyKey: string): Promise<RecoveryExecutionRow | null> {
+    return this.rows.get(idempotencyKey) ?? null;
+  }
+
+  async updateStatus(args: {
+    id: string;
+    status: ExecutionStatus;
+    startedAt?: Date;
+    completedAt?: Date;
+    failureCode?: string | null;
+    failureReason?: string | null;
+  }): Promise<RecoveryExecutionRow> {
+    for (const [key, row] of this.rows.entries()) {
+      if (row.id === args.id) {
+        const updated: RecoveryExecutionRow = {
+          ...row,
+          status: args.status,
+          startedAt: args.startedAt ?? row.startedAt,
+          completedAt: args.completedAt ?? row.completedAt,
+          failureCode: args.failureCode !== undefined ? args.failureCode : row.failureCode,
+          failureReason:
+            args.failureReason !== undefined ? args.failureReason : row.failureReason,
+          updatedAt: new Date(),
+        };
+        this.rows.set(key, updated);
+        return updated;
+      }
+    }
+    throw new Error(`Execution ${args.id} not found`);
+  }
+
+  async listByOpportunity(opportunityId: string): Promise<RecoveryExecutionRow[]> {
+    return [...this.rows.values()]
+      .filter((row) => row.opportunityId === opportunityId)
+      .sort((a, b) => b.attempt - a.attempt || b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  async findLatestByOpportunityAndAction(
+    opportunityId: string,
+    action: RecoveryExecutionRow['action']
+  ): Promise<RecoveryExecutionRow | null> {
+    const matches = [...this.rows.values()]
+      .filter((row) => row.opportunityId === opportunityId && row.action === action)
+      .sort((a, b) => b.attempt - a.attempt || b.createdAt.getTime() - a.createdAt.getTime());
+    return matches[0] ?? null;
+  }
+
+  async countRetryAttempts(opportunityId: string): Promise<number> {
+    return [...this.rows.values()].filter(
+      (row) => row.opportunityId === opportunityId && row.action === 'RETRY' && row.status !== 'BLOCKED'
+    ).length;
+  }
+}
+
+type FakeProviderBehavior =
+  | { kind: 'accepted' }
+  | { kind: 'rejected'; failureCode?: string; failureReason?: string }
+  | { kind: 'unavailable'; reason?: string }
+  | { kind: 'throw' };
+
+/** Deterministic fake execution provider for tests (no network). */
+export class FakeRecoveryExecutionProvider implements RecoveryExecutionProvider {
+  readonly provider = 'fake';
+  calls: RetryPaymentRequest[] = [];
+
+  constructor(private behavior: FakeProviderBehavior = { kind: 'accepted' }) {}
+
+  setBehavior(behavior: FakeProviderBehavior): void {
+    this.behavior = behavior;
+  }
+
+  async retryPayment(request: RetryPaymentRequest): Promise<RetryPaymentResult> {
+    this.calls.push(request);
+    switch (this.behavior.kind) {
+      case 'accepted':
+        return { kind: 'accepted', providerReferenceId: `ref_${request.executionId}` };
+      case 'rejected':
+        return {
+          kind: 'rejected',
+          failureCode: this.behavior.failureCode ?? 'payment_declined',
+          failureReason: this.behavior.failureReason ?? 'The provider declined the retry.',
+        };
+      case 'unavailable':
+        return { kind: 'unavailable', reason: this.behavior.reason ?? 'timeout' };
+      case 'throw':
+        throw new Error('synthetic provider crash');
+    }
+  }
 }

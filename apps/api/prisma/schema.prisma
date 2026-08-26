@@ -75,6 +75,19 @@ enum AIAdviceStatus {
   AVAILABLE
 }
 
+/// Controlled execution lifecycle. Mirrors ExecutionStatus in
+/// src/domain/recovery-execution.ts; transitions are restricted by the pure
+/// state machine in src/execution/state-machine.ts.
+enum ExecutionStatus {
+  PENDING
+  AUTHORIZED
+  EXECUTING
+  SUCCEEDED
+  FAILED
+  BLOCKED
+  CANCELLED
+}
+
 model Merchant {
   id              String                @id @default(uuid()) @db.Uuid
   name            String
@@ -85,6 +98,7 @@ model Merchant {
   opportunities   RecoveryOpportunity[]
   decisions       RecoveryDecision[]
   aiAdvice        RecoveryAIAdvice[]
+  executions      RecoveryExecution[]
 
   @@map("merchants")
 }
@@ -174,6 +188,7 @@ model RecoveryOpportunity {
   recoveryEvent     PaymentEvent?             @relation("OpportunityRecoveryEvent", fields: [recoveryEventId], references: [id], onDelete: SetNull)
   decisions         RecoveryDecision[]
   aiAdvice          RecoveryAIAdvice[]
+  executions        RecoveryExecution[]
 
   /// Idempotency: one opportunity per (source event, detection category).
   @@unique([sourceEventId, type])
@@ -214,6 +229,7 @@ model RecoveryDecision {
   merchant          Merchant?          @relation(fields: [merchantId], references: [id], onDelete: SetNull)
   opportunity       RecoveryOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
   aiAdvice          RecoveryAIAdvice[]
+  executions        RecoveryExecution[]
 
   /// One current decision per (opportunity, engine version); re-evaluation
   /// upserts. Append-only decision history is a future extension.
@@ -262,4 +278,38 @@ model RecoveryAIAdvice {
   @@index([merchantId])
   @@index([opportunityId])
   @@map("recovery_ai_advice")
+}
+
+model RecoveryExecution {
+  id                String           @id @default(uuid()) @db.Uuid
+  merchantId        String?          @db.Uuid
+  opportunityId     String           @db.Uuid
+  /// The fresh deterministic decision that authorized this execution.
+  decisionId        String           @db.Uuid
+  action            RecommendedAction
+  status            ExecutionStatus
+  /// 1-based attempt number among non-blocked executions of the opportunity.
+  attempt           Int              @default(1)
+  /// Stable key (opportunity + decision + action + attempt) preventing
+  /// duplicate provider operations; enforced by the database.
+  idempotencyKey    String           @unique
+  provider          String?
+  providerPaymentId String?
+  requestedAt       DateTime         @default(now())
+  startedAt         DateTime?
+  completedAt       DateTime?
+  failureCode       String?
+  failureReason     String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  merchant          Merchant?        @relation(fields: [merchantId], references: [id], onDelete: SetNull)
+  opportunity       RecoveryOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  decision          RecoveryDecision    @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+
+  @@index([opportunityId])
+  @@index([merchantId])
+  @@index([decisionId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("recovery_executions")
 }

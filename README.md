@@ -245,6 +245,14 @@ provider/model/advisorVersion/promptVersion stamps for auditability. Cascade
 FK to the deterministic decision, `SET NULL` merchant relation. Raw provider
 responses are never stored.
 
+Phase 6 adds `recovery_executions` (migration
+`20260826032642_add_recovery_executions`): one auditable row per execution
+attempt — action/status enums, attempt number, unique `idempotency_key`,
+provider label + payment reference (no credentials, no raw responses),
+requested/started/completed timestamps and normalized failure code/reason.
+Cascade FKs to opportunity + decision, `SET NULL` merchant; indexes on
+opportunity/merchant/decision/status/createdAt.
+
 ## 8. Running the application
 
 ```bash
@@ -469,7 +477,15 @@ evidence-gap warnings, no manufactured certainty), service orchestration
 change, every failure fallback, advisor crashes, tenant attribution, minimized
 input), route contracts (generated/cached/disabled/unavailable states, 404/422,
 secret-leak prevention) — all with a deterministic fake advisor; no test ever
-touches a real AI provider.
+touches a real AI provider. Phase 6 adds execution tests:
+  safety-gate matrix (every blocking rule plus the allowed path),
+  state-machine transitions and terminals, provider adapter normalization
+  against stubbed fetch (accepted/rejected/timeout/network/malformed/
+  not-configured), service orchestration with a fake provider (single provider
+  call per logical attempt, replay semantics, disabled mode, stale refresh,
+  blocked audit records, retry limits, no false recovery claims, tenant
+  attribution), repository idempotency/counting, and route contracts
+  (201/200/409/503, eligibility snapshots, tenant scoping).
 
 ## 10. Lint
 

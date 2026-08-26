@@ -4,6 +4,7 @@ import type { RecoveryOpportunityRepository } from '../repositories/recovery-opp
 import type { RecoveryDecisionRepository } from '../repositories/recovery-decision.repository.js';
 import type { RecoveryDecisionService } from '../services/recovery-decision.service.js';
 import type { RecoveryAIAdvisorService } from '../services/recovery-ai-advisor.service.js';
+import type { RecoveryExecutionService } from '../services/recovery-execution.service.js';
 import type { FastifyRequest } from 'fastify';
 
 declare module 'fastify' {
@@ -18,6 +19,8 @@ declare module 'fastify' {
     decisionService: RecoveryDecisionService;
     /** Advisory AI intelligence layer (never mutates deterministic decisions). */
     aiAdvisorService: RecoveryAIAdvisorService;
+    /** Controlled recovery execution orchestration (safety-gated). */
+    executionService: RecoveryExecutionService;
   }
 
   interface FastifyRequest {

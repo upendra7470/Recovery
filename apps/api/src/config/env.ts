@@ -53,6 +53,19 @@ export const envSchema = z.object({
   AI_BASE_URL: emptyToUndefined(z.url().optional()),
   AI_TIMEOUT_MS: z.coerce.number().int().min(250).max(60_000).default(5000),
   AI_ADVISOR_VERSION: z.string().regex(/^v\d+$/).default('v1'),
+  // ---------------------------------------------------------------------------
+  // Controlled recovery execution (Phase 6) — DISABLED by default. The
+  // deterministic decision engine remains authoritative; only RETRY is ever
+  // executable and every request passes the safety gate.
+  // ---------------------------------------------------------------------------
+  RECOVERY_EXECUTION_ENABLED: booleanFlag(false),
+  RECOVERY_EXECUTION_MIN_CONFIDENCE: z.coerce.number().int().min(0).max(100).default(60),
+  RECOVERY_EXECUTION_MAX_RETRIES: z.coerce.number().int().min(1).max(10).default(3),
+  RECOVERY_EXECUTION_TIMEOUT_MS: z.coerce.number().int().min(250).max(60_000).default(5000),
+  RECOVERY_EXECUTION_PROVIDER: emptyToUndefined(z.enum(['razorpay']).optional()),
+  /** Gateway endpoint for retry submission; unset ⇒ provider reports not_configured. */
+  RECOVERY_EXECUTION_API_URL: emptyToUndefined(z.url().optional()),
+  RECOVERY_EXECUTION_API_KEY: emptyToUndefined(z.string().min(1).optional()),
 }).superRefine((env, ctx) => {
   if (env.AI_ENABLED) {
     for (const field of ['AI_MODEL', 'AI_API_KEY', 'AI_BASE_URL'] as const) {
@@ -64,6 +77,15 @@ export const envSchema = z.object({
         });
       }
     }
+  }
+  // A configured provider endpoint requires credentials so provider calls can
+  // never silently go out unauthenticated.
+  if (env.RECOVERY_EXECUTION_API_URL !== undefined && env.RECOVERY_EXECUTION_API_KEY === undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['RECOVERY_EXECUTION_API_KEY'],
+      message: 'Required when RECOVERY_EXECUTION_API_URL is set',
+    });
   }
 });
 

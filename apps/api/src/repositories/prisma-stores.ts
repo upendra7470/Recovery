@@ -24,6 +24,11 @@ import type {
   RecoveryAIAdviceRow,
   RecoveryAIAdviceStore,
 } from '../domain/recovery-ai-advice.js';
+import type {
+  NewRecoveryExecutionData,
+  RecoveryExecutionRow,
+  RecoveryExecutionStore,
+} from '../domain/recovery-execution.js';
 
 /**
  * Prisma-backed implementations of the ingestion/detection store boundaries.
@@ -372,6 +377,52 @@ export function createPrismaRecoveryAIAdviceStore(
         },
       });
       return row ? toAdviceRow(row) : null;
+    },
+  };
+}
+
+export function createPrismaRecoveryExecutionStore(
+  client: PrismaClient
+): RecoveryExecutionStore {
+  return {
+    async insert(data: NewRecoveryExecutionData): Promise<RecoveryExecutionRow> {
+      const row: RecoveryExecutionRow = await client.recoveryExecution.create({ data });
+      return row;
+    },
+    async findByIdempotencyKey(idempotencyKey) {
+      const row = await client.recoveryExecution.findUnique({ where: { idempotencyKey } });
+      return row ?? null;
+    },
+    async updateStatus(args) {
+      const row = await client.recoveryExecution.update({
+        where: { id: args.id },
+        data: {
+          status: args.status,
+          ...(args.startedAt !== undefined ? { startedAt: args.startedAt } : {}),
+          ...(args.completedAt !== undefined ? { completedAt: args.completedAt } : {}),
+          ...(args.failureCode !== undefined ? { failureCode: args.failureCode } : {}),
+          ...(args.failureReason !== undefined ? { failureReason: args.failureReason } : {}),
+        },
+      });
+      return row;
+    },
+    async listByOpportunity(opportunityId) {
+      return client.recoveryExecution.findMany({
+        where: { opportunityId },
+        orderBy: [{ attempt: 'desc' }, { createdAt: 'desc' }],
+      });
+    },
+    async findLatestByOpportunityAndAction(opportunityId, action) {
+      const row = await client.recoveryExecution.findFirst({
+        where: { opportunityId, action },
+        orderBy: [{ attempt: 'desc' }, { createdAt: 'desc' }],
+      });
+      return row ?? null;
+    },
+    async countRetryAttempts(opportunityId) {
+      return client.recoveryExecution.count({
+        where: { opportunityId, action: 'RETRY', status: { not: 'BLOCKED' } },
+      });
     },
   };
 }

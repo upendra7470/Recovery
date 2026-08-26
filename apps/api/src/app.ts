@@ -8,6 +8,7 @@ import { registerErrorHandler } from './plugins/error-handler.js';
 import { registerSecurityHeaders } from './plugins/security-headers.js';
 import { opportunityRoutes } from './routes/opportunities.js';
 import { decisionRoutes } from './routes/decisions.js';
+import { executionRoutes } from './routes/executions.js';
 import { healthRoutes } from './routes/health.js';
 import { readyRoutes } from './routes/ready.js';
 import { webhookRoutes } from './routes/webhooks.js';
@@ -15,12 +16,18 @@ import { RecoveryOpportunityRepository } from './repositories/recovery-opportuni
 import { RecoveryDecisionRepository } from './repositories/recovery-decision.repository.js';
 import { RecoveryDecisionService } from './services/recovery-decision.service.js';
 import { RecoveryAIAdvisorService } from './services/recovery-ai-advisor.service.js';
+import { RecoveryExecutionService } from './services/recovery-execution.service.js';
+import { RazorpayRetryAdapter } from './execution/providers/razorpay-retry.adapter.js';
+import type { RecoveryExecutionProvider } from './domain/recovery-execution.js';
+import { RecoveryExecutionRepository } from './repositories/recovery-execution.repository.js';
 import { OpenAICompatibleAdvisor } from './ai/providers/openai-compatible.js';
 
 export interface BuildAppOptions {
   env?: AppEnv;
   /** Inject a database implementation (tests); defaults to a real Prisma client. */
   db?: AppDatabase;
+  /** Inject an execution provider (tests); defaults to the env-configured adapter. */
+  executionProvider?: RecoveryExecutionProvider;
 }
 
 export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance> {
@@ -86,6 +93,35 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     )
   );
 
+  // Controlled recovery execution (Phase 6): disabled by default. The
+  // provider is constructed only when a gateway endpoint is configured;
+  // otherwise the adapter deterministically reports not_configured.
+  const executionProvider =
+    options.executionProvider ??
+    (env.RECOVERY_EXECUTION_PROVIDER === 'razorpay'
+      ? new RazorpayRetryAdapter({
+          baseUrl: env.RECOVERY_EXECUTION_API_URL,
+          apiKey: env.RECOVERY_EXECUTION_API_KEY,
+          timeoutMs: env.RECOVERY_EXECUTION_TIMEOUT_MS,
+        })
+      : null);
+  app.decorate(
+    'executionService',
+    new RecoveryExecutionService(
+      app.opportunities,
+      decisionService,
+      new RecoveryExecutionRepository(db.recoveryExecution),
+      db.paymentEvent,
+      executionProvider,
+      {
+        enabled: env.RECOVERY_EXECUTION_ENABLED,
+        minConfidence: env.RECOVERY_EXECUTION_MIN_CONFIDENCE,
+        maxRetries: env.RECOVERY_EXECUTION_MAX_RETRIES,
+      },
+      app.log
+    )
+  );
+
   app.addHook('onRequest', async (request, reply) => {
     void reply.header('x-request-id', request.id);
   });
@@ -97,6 +133,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(webhookRoutes);
   await app.register(opportunityRoutes);
   await app.register(decisionRoutes);
+  await app.register(executionRoutes);
 
   app.addHook('onClose', async () => {
     await closeDatabase();

@@ -5,6 +5,7 @@ import type {
 import type { RecoveryOpportunityStore } from '../domain/recovery-opportunity.js';
 import type { RecoveryDecisionStore } from '../domain/recovery-decision.js';
 import type { RecoveryAIAdviceStore } from '../domain/recovery-ai-advice.js';
+import type { RecoveryExecutionStore } from '../domain/recovery-execution.js';
 
 export type DbQueryTag = (strings: TemplateStringsArray, ...values: unknown[]) => Promise<unknown>;
 
@@ -23,6 +24,7 @@ export interface AppDatabase extends DbExecutor {
   readonly recoveryOpportunity: RecoveryOpportunityStore;
   readonly recoveryDecision: RecoveryDecisionStore;
   readonly recoveryAIAdvice: RecoveryAIAdviceStore;
+  readonly recoveryExecution: RecoveryExecutionStore;
 }
 
 export interface DbCheckOk {
