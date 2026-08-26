@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react';
 
-export type NavIconName = 'overview' | 'cases' | 'pulse' | 'sparkles' | 'chart' | 'settings';
+export type NavIconName = 'overview' | 'cases' | 'operations' | 'pulse' | 'sparkles' | 'chart' | 'settings';
 
 const ICON_PATHS: Record<NavIconName, ReactElement> = {
   overview: (
@@ -31,6 +31,12 @@ const ICON_PATHS: Record<NavIconName, ReactElement> = {
       <path d="M13 17V7" />
       <path d="M18 17v-3" />
     </>
+  ),
+  operations: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
+    </svg>
   ),
   settings: (
     <>

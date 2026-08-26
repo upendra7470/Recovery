@@ -50,6 +50,10 @@ export class RecoveryDecisionRepository {
     return this.store.upsert(data);
   }
 
+  findById(id: string): Promise<RecoveryDecisionRow | null> {
+    return this.store.findById(id);
+  }
+
   findByOpportunityAndEngineVersion(
     opportunityId: string,
     engineVersion: string

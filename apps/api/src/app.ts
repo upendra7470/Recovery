@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import { loadEnv, type AppEnv } from './config/env.js';
+import { startRecoveryAutomation } from './runtime/recovery-automation.js';
 import type { AppDatabase } from './lib/database.js';
 import { createLoggerOptions } from './lib/logger.js';
 import { createAppDatabase, createPrismaClient, type PrismaClient } from './lib/prisma.js';
@@ -9,6 +10,7 @@ import { registerSecurityHeaders } from './plugins/security-headers.js';
 import { opportunityRoutes } from './routes/opportunities.js';
 import { decisionRoutes } from './routes/decisions.js';
 import { executionRoutes } from './routes/executions.js';
+import { operationsRoutes } from './routes/operations.js';
 import { healthRoutes } from './routes/health.js';
 import { readyRoutes } from './routes/ready.js';
 import { webhookRoutes } from './routes/webhooks.js';
@@ -17,6 +19,8 @@ import { RecoveryDecisionRepository } from './repositories/recovery-decision.rep
 import { RecoveryDecisionService } from './services/recovery-decision.service.js';
 import { RecoveryAIAdvisorService } from './services/recovery-ai-advisor.service.js';
 import { RecoveryExecutionService } from './services/recovery-execution.service.js';
+import { RecoveryOperationScheduler } from './services/recovery-operation-scheduler.service.js';
+import { RecoveryOperationsService } from './services/recovery-operations.service.js';
 import { RazorpayRetryAdapter } from './execution/providers/razorpay-retry.adapter.js';
 import type { RecoveryExecutionProvider } from './domain/recovery-execution.js';
 import { RecoveryExecutionRepository } from './repositories/recovery-execution.repository.js';
@@ -122,6 +126,39 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     )
   );
 
+  // Phase 7: recovery operations & automation. The in-process scheduler is a
+  // replaceable runtime around the SAME execution pipeline; when automation
+  // is disabled nothing is scheduled and no timers run.
+  const executionRepository = new RecoveryExecutionRepository(db.recoveryExecution);
+  const automationConfig = {
+    maxAttempts: env.RECOVERY_MAX_ATTEMPTS,
+    backoffSeconds: env.RECOVERY_RETRY_BACKOFF_SECONDS,
+    maxAgeHours: env.RECOVERY_OPERATION_MAX_AGE_HOURS,
+    batchSize: 25,
+  };
+  app.decorate('operationsService', new RecoveryOperationsService(
+    executionRepository,
+    app.opportunities,
+    decisionService,
+    {
+      automationEnabled: env.RECOVERY_AUTOMATION_ENABLED,
+      providerConfigured: executionProvider !== null,
+      defaultListLimit: 100,
+    },
+    app.log
+  ));
+  const operationScheduler = new RecoveryOperationScheduler(
+    app.opportunities,
+    decisionService,
+    executionRepository,
+    app.executionService,
+    automationConfig,
+    app.log
+  );
+  if (env.RECOVERY_AUTOMATION_ENABLED) {
+    startRecoveryAutomation(operationScheduler, env.RECOVERY_AUTOMATION_TICK_SECONDS, app.log, app);
+  }
+
   app.addHook('onRequest', async (request, reply) => {
     void reply.header('x-request-id', request.id);
   });
@@ -134,6 +171,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(opportunityRoutes);
   await app.register(decisionRoutes);
   await app.register(executionRoutes);
+  await app.register(operationsRoutes);
 
   app.addHook('onClose', async () => {
     await closeDatabase();

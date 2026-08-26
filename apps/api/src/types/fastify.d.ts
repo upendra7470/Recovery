@@ -5,6 +5,7 @@ import type { RecoveryDecisionRepository } from '../repositories/recovery-decisi
 import type { RecoveryDecisionService } from '../services/recovery-decision.service.js';
 import type { RecoveryAIAdvisorService } from '../services/recovery-ai-advisor.service.js';
 import type { RecoveryExecutionService } from '../services/recovery-execution.service.js';
+import type { RecoveryOperationsService } from '../services/recovery-operations.service.js';
 import type { FastifyRequest } from 'fastify';
 
 declare module 'fastify' {
@@ -21,6 +22,8 @@ declare module 'fastify' {
     aiAdvisorService: RecoveryAIAdvisorService;
     /** Controlled recovery execution orchestration (safety-gated). */
     executionService: RecoveryExecutionService;
+    /** Observational operations surface (overview, execution feed, detail). */
+    operationsService: RecoveryOperationsService;
   }
 
   interface FastifyRequest {

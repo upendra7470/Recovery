@@ -9,6 +9,7 @@ export interface NavItem {
 export const navItems: readonly NavItem[] = [
   { label: 'Overview', href: '/', icon: 'overview' },
   { label: 'Recovery Cases', href: '/recovery-cases', icon: 'cases' },
+  { label: 'Recovery Operations', href: '/operations', icon: 'operations' },
   { label: 'Payment Health', href: '/payment-health', icon: 'pulse' },
   { label: 'AI Decisions', href: '/ai-decisions', icon: 'sparkles' },
   { label: 'Analytics', href: '/analytics', icon: 'chart' },

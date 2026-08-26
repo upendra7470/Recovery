@@ -34,6 +34,10 @@ export const EXECUTION_STATUSES = [
 ] as const;
 export type ExecutionStatus = (typeof EXECUTION_STATUSES)[number];
 
+/** What triggered the execution record. Mirrors the ExecutionOrigin enum. */
+export const EXECUTION_ORIGINS = ['MANUAL', 'AUTOMATED'] as const;
+export type ExecutionOrigin = (typeof EXECUTION_ORIGINS)[number];
+
 /** Actions an execution record can represent. Reuses the deterministic
  * recommendation vocabulary — callers can NEVER invent new actions. */
 export type ExecutionAction = RecoveryDecisionRow['recommendedAction'];
@@ -56,6 +60,41 @@ export const BLOCKING_RISK_FLAGS: readonly string[] = [
   'NON_RECOVERABLE_CONDITION',
   'HIGH_RETRY_COUNT',
 ];
+
+/**
+ * Deterministic reconciliation between an accepted/failed provider operation
+ * and the webhook-confirmed opportunity outcome. A provider accepting a retry
+ * request is NEVER payment recovery — only `recovered` reflects an actual
+ * captured payment event.
+ */
+export type ExecutionReconciliation =
+  | 'recovered'
+  | 'awaiting_payment_outcome'
+  | 'opportunity_closed'
+  | 'failed'
+  | 'not_applicable';
+
+export function describeReconciliation(
+  executionStatus: ExecutionStatus,
+  opportunityStatus: RecoveryOpportunityRow['status']
+): ExecutionReconciliation {
+  if (executionStatus === 'SUCCEEDED') {
+    if (opportunityStatus === 'RECOVERED') return 'recovered';
+    if (opportunityStatus === 'OPEN') return 'awaiting_payment_outcome';
+    return 'opportunity_closed';
+  }
+  if (executionStatus === 'FAILED') return 'failed';
+  return 'not_applicable';
+}
+
+/** Failure codes classified as transient ⇒ eligible for bounded auto-retry. */
+export const RETRYABLE_FAILURE_CODES: readonly string[] = [
+  'PROVIDER_UNAVAILABLE',
+];
+
+export function isRetryableFailure(failureCode: string | null): boolean {
+  return failureCode !== null && RETRYABLE_FAILURE_CODES.includes(failureCode);
+}
 
 // ---------------------------------------------------------------------------
 // Safety gate (pure)
@@ -209,7 +248,11 @@ export interface RecoveryExecutionRow {
   decisionId: string;
   action: ExecutionAction;
   status: ExecutionStatus;
+  origin: ExecutionOrigin;
   attempt: number;
+  /** When this scheduled operation becomes due (automation). */
+  nextAttemptAt: Date | null;
+  scheduledAt: Date | null;
   idempotencyKey: string;
   provider: string | null;
   providerPaymentId: string | null;
@@ -229,7 +272,10 @@ export interface NewRecoveryExecutionData {
   decisionId: string;
   action: ExecutionAction;
   status: ExecutionStatus;
+  origin: ExecutionOrigin;
   attempt: number;
+  nextAttemptAt: Date | null;
+  scheduledAt: Date | null;
   idempotencyKey: string;
   provider: string | null;
   providerPaymentId: string | null;
@@ -244,6 +290,7 @@ export interface NewRecoveryExecutionData {
 export interface RecoveryExecutionStore {
   insert(data: NewRecoveryExecutionData): Promise<RecoveryExecutionRow>;
   findByIdempotencyKey(idempotencyKey: string): Promise<RecoveryExecutionRow | null>;
+  findById(id: string): Promise<RecoveryExecutionRow | null>;
   updateStatus(args: {
     id: string;
     status: ExecutionStatus;
@@ -252,12 +299,34 @@ export interface RecoveryExecutionStore {
     failureCode?: string | null;
     failureReason?: string | null;
   }): Promise<RecoveryExecutionRow>;
+  /**
+   * Conditional transition used to establish OWNERSHIP before a provider
+   * call: returns the updated row only when the current status still matches
+   * `from`; returns null when another worker won the race or the transition
+   * is invalid. Backed by a single atomic database update.
+   */
+  transitionStatus(args: {
+    id: string;
+    from: ExecutionStatus;
+    to: ExecutionStatus;
+    startedAt?: Date;
+    completedAt?: Date;
+    failureCode?: string | null;
+    failureReason?: string | null;
+  }): Promise<RecoveryExecutionRow | null>;
+  setNextAttemptAt(args: { id: string; nextAttemptAt: Date }): Promise<RecoveryExecutionRow>;
   listByOpportunity(opportunityId: string): Promise<RecoveryExecutionRow[]>;
   /** Most recent execution of one action for an opportunity (null when none). */
   findLatestByOpportunityAndAction(
     opportunityId: string,
     action: ExecutionAction
   ): Promise<RecoveryExecutionRow | null>;
+  /** Latest execution in a non-terminal state for the opportunity (null when none). */
+  findActiveByOpportunity(opportunityId: string): Promise<RecoveryExecutionRow | null>;
+  findDuePending(args: { dueBefore: Date; limit: number }): Promise<RecoveryExecutionRow[]>;
+  findStalePending(args: { createdBefore: Date; limit: number }): Promise<RecoveryExecutionRow[]>;
+  listRecent(filters: { status?: ExecutionStatus; limit: number }): Promise<RecoveryExecutionRow[]>;
+  countByStatus(): Promise<{ status: ExecutionStatus; count: number }[]>;
   countRetryAttempts(opportunityId: string): Promise<number>;
 }
 

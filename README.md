@@ -7,14 +7,13 @@ understand where revenue is leaking, decide how to recover it safely, execute
 approved recovery actions, verify outcomes, and measure the revenue actually
 recovered.
 
-> **Status: Phase 5 — AI-assisted recovery intelligence (advisory, optional, provider-independent).**
-> RecoveryOS ingests Razorpay payment events, detects revenue leakage, and
-> scores every opportunity with a transparent deterministic decision engine.
-> Phase 5 adds an OPTIONAL AI layer that explains decisions in plain language
-> and drafts operator/customer communication. **AI is advisory and cannot
-> override deterministic payment recovery safety decisions.** No AI SDKs are
-> used; the provider is any OpenAI-compatible endpoint; everything works with
-> AI disabled.
+> **Status: Phase 7 — Recovery operations & automation (scheduled execution, bounded retries, reconciliation).**
+> RecoveryOS ingests Razorpay payment events, detects revenue leakage, scores
+> every opportunity deterministically, and adds optional advisory AI. Phase 6
+> introduced safety-gated controlled execution; Phase 7 makes it operational:
+> a deterministic scheduler plans and runs bounded automated retries through
+> the same pipeline and reconciles them against webhook-confirmed outcomes.
+> Automation is disabled by default; AI remains advisory-only.
 
 ---
 
@@ -30,7 +29,7 @@ manual follow-ups or blunt retry loops. RecoveryOS is being built to provide:
 - **Execution** – orchestrated recovery actions (retries, payment links, voice).
 - **Verification & measurement** – verified outcomes and true recovered-revenue reporting.
 
-## 2. Current phase scope (Phase 1–5)
+## 2. Current phase scope (Phase 1–7)
 
 Phase 1 delivered the application foundation:
 
@@ -96,6 +95,19 @@ Phase 5 adds the optional AI-assisted intelligence layer (advisory only):
 | Persistence & caching | `recovery_ai_advice` table keyed per (decision, advisor version, model) with a decision-content fingerprint — unchanged decisions reuse stored advice, changed decisions regenerate it |
 | API | `GET /opportunities/:id/ai-advice` returns `{ opportunityId, decision (always), ai: available \| disabled \| unavailable }` with safe reason codes only |
 | UI | "AI Recovery Intelligence" section on case detail: status states, summary/explanation/next step, draft customer + operator messages, AI confidence, warnings — visually subordinate to the deterministic decision |
+
+Phase 6 adds controlled recovery execution & outcome tracking:
+
+| Area | Delivered |
+| --- | --- |
+| Execution domain | `RecoveryExecution` records with an explicit state machine (`PENDING → AUTHORIZED → EXECUTING → SUCCEEDED/FAILED`; `PENDING→BLOCKED/CANCELLED`), auditable attempts, database-unique idempotency keys |
+| Safety gate | Pure deterministic gate: RETRY executes only when the fresh decision says exactly RETRY, confidence ≥ minimum, no blocking risk flag, opportunity OPEN, payment not already captured, retries under limit, payment identifier present |
+| Stale decisions | Execution always loads the decision via the stale-aware Phase 4 service before gating |
+| Idempotency | Unique idempotency key + in-flight/accepted replay guard — duplicate requests never duplicate provider calls |
+| Provider capability | Narrow `retryPayment(...)` interface; HTTP Razorpay-retry adapter against a configurable gateway endpoint — unconfigured ⇒ deterministic `not_configured`, never fake success |
+| Outcome truth | Provider acceptance is recorded as request-submitted only; opportunities become RECOVERED exclusively via the existing payment-event flow |
+| API | `POST /opportunities/:id/execute`, `GET /opportunities/:id/executions` |
+| Frontend | Recovery Execution section on case detail with eligibility, attempt history and truthful "awaiting payment outcome" messaging |
 
 Explicitly **not** implemented yet: autonomous payments/retries/refunds/messaging,
 model training/fine-tuning, vector databases, RAG, agents, orchestration
@@ -251,7 +263,11 @@ attempt — action/status enums, attempt number, unique `idempotency_key`,
 provider label + payment reference (no credentials, no raw responses),
 requested/started/completed timestamps and normalized failure code/reason.
 Cascade FKs to opportunity + decision, `SET NULL` merchant; indexes on
-opportunity/merchant/decision/status/createdAt.
+opportunity/merchant/decision/status/createdAt. Phase 7 extends
+`recovery_executions` with scheduling fields (migration
+`20260826120833_add_execution_scheduling_fields`): `origin`
+(MANUAL/AUTOMATED), `nextAttemptAt`, `scheduledAt`, and a composite
+`(status, next_attempt_at)` index powering due-work discovery.
 
 ## 8. Running the application
 
@@ -440,6 +456,60 @@ curl 'http://localhost:4000/opportunities/<opportunity-id>/ai-advice'
 # → { "decision": {...}, "ai": { "status": "disabled", ... } }
 ```
 
+## 8.5 Controlled recovery execution (Phase 6)
+
+```text
+fresh deterministic decision (stale-aware) → pure safety gate →
+idempotent execution record → state-machine-guarded provider call →
+normalized result → (later) payment event confirms actual recovery
+```
+
+Safety rules enforced by the gate (any failure ⇒ BLOCKED, never silent):
+
+- action must be exactly `RETRY` (`WAIT` becomes a scheduled PENDING record;
+  `DO_NOT_RETRY` / `NO_ACTION` / `REVIEW` / `CUSTOMER_ACTION_REQUIRED` are
+  never executable)
+- opportunity still OPEN and payment not already captured
+- decision confidence ≥ `RECOVERY_EXECUTION_MIN_CONFIDENCE`
+- no blocking risk flag (`NON_RECOVERABLE_CONDITION`, `HIGH_RETRY_COUNT`)
+- prior attempts < `RECOVERY_EXECUTION_MAX_RETRIES`
+- provider payment identifier present
+
+Manual ≠ override: operator-triggered execution runs exactly the same gate.
+Duplicate POSTs return the existing execution without a second provider call.
+Provider acceptance is NOT recovery — opportunities flip to RECOVERED only via
+the payment-event flow.
+
+```bash
+POST /opportunities/:id/execute   # 201 created · 200 replayed · 409 blocked · 503 disabled/unavailable
+GET  /opportunities/:id/executions # eligibility + full attempt history
+```
+
+## 8.6 Recovery operations & automation (Phase 7)
+
+```text
+Scheduler tick:
+  A. stale handling   PENDING older than max age ⇒ CANCELLED (STALE_MAX_AGE)
+  B. planning         OPEN + fresh RETRY/WAIT-eligible decision with no active
+                      execution ⇒ audited AUTOMATED PENDING record
+  C. execution        due PENDING rows run through the Phase 6 pipeline:
+                      fresh decision → safety gate → atomic ownership claim
+                      (conditional PENDING→AUTHORIZED update) → provider
+Retry policy:          only PROVIDER_UNAVAILABLE-class failures retry;
+                       delay = base × 2^(failedAttempt−1), capped at 6h;
+                       attempts capped by RECOVERY_MAX_ATTEMPTS
+```
+
+The scheduler is a replaceable in-process runtime around the same domain
+services; an external job queue can drive `tick()` instead. Operational
+visibility:
+
+```bash
+GET /operations/overview              # automation flags, status counters, due-now count
+GET /operations/executions?status=&merchantId=&limit=
+GET /operations/executions/:id        # timeline, authorizing decision, reconciliation
+```
+
 ## 9. Tests
 
 ```bash
@@ -485,7 +555,12 @@ touches a real AI provider. Phase 6 adds execution tests:
   call per logical attempt, replay semantics, disabled mode, stale refresh,
   blocked audit records, retry limits, no false recovery claims, tenant
   attribution), repository idempotency/counting, and route contracts
-  (201/200/409/503, eligibility snapshots, tenant scoping).
+  (201/200/409/503, eligibility snapshots, tenant scoping). Phase 7 adds scheduler
+  tests (planning idempotence, one provider call per logical attempt across
+  duplicate ticks, bounded deterministic retries, stale cancellation,
+  blocked-audit behavior, tenant attribution), retry-policy unit tests,
+  operations route tests (overview/list filters/detail/scoping/validation),
+  env bounds for new variables, and a web test pinning reconciliation labels.
 
 ## 10. Lint
 

@@ -369,6 +369,46 @@ Key decisions:
   have an interface method, so unsafe future actions cannot slip through
   typing. Raw provider payloads and credentials never cross the boundary.
 
+## 5.5.1 Recovery operations & automation (Phase 7)
+
+```
+RecoveryOperationScheduler.tick()      services/recovery-operation-scheduler.service.ts
+  │
+  ├─ A. stale handling   PENDING older than RECOVERY_OPERATION_MAX_AGE_HOURS
+  │                      → CANCELLED(STALE_MAX_AGE) — audited, never deleted
+  ├─ B. planning         OPEN opportunities with fresh RETRY/WAIT-eligible
+  │     decisions and NO active execution ⇒ AUTOMATED PENDING records
+  │     (unique idempotency keys; active-execution guard prevents duplicates)
+  └─ C. execution        due PENDING rows → RecoveryExecutionService
+                           .runScheduledExecution(id)
+                            │  fresh stale-aware decision (Phase 4 service)
+                            │  safety gate re-run (identical rules)
+                            │  atomic ownership claim:
+                            │    conditional update WHERE status='PENDING'
+                            │  → provider via the shared attempt pipeline
+  Retry policy (pure)    execution/retry-policy.ts
+                         only PROVIDER_UNAVAILABLE-class failures retry;
+                         delay = base × 2^(failedAttempt−1), capped at 6h;
+                         attempts capped by RECOVERY_MAX_ATTEMPTS; each retry
+                         is a NEW audited PENDING row scheduled in the future
+  Reconciliation         describeReconciliation(execution, opportunity):
+                         SUCCEEDED+RECOVERED ⇒ recovered · SUCCEEDED+OPEN ⇒
+                         awaiting_payment_outcome · FAILED ⇒ failed …
+```
+
+Key decisions:
+
+- **One pipeline.** Manual and automated execution share
+  `RecoveryExecutionService`; the scheduler cannot diverge from operator
+  behavior because it never touches the provider directly.
+- **Ownership before side effects.** The PENDING→AUTHORIZED transition is a
+  single conditional database update: duplicate ticks, dual processes and
+  manual races converge to exactly one provider call per logical attempt.
+- **Bounded and deterministic.** No randomness in backoff; absolute attempt
+  caps; stale work is cancelled with an explicit reason code.
+- **Replaceable runtime.** `runtime/recovery-automation.ts` is the only place
+  a timer exists; external queues can drive `tick()` unchanged.
+
 ## 6. Logging & observability
 
 Structured JSON logs via pino: ISO timestamps, level, `service:"recoveryos"`,
@@ -479,6 +519,10 @@ Vitest, node environment, no live DB required for CI determinism:
   with a fake provider (single call per attempt, replays, disabled mode,
   stale refresh, blocked audit rows, limits, tenant attribution), repository
   idempotency/counting and route contracts (201/200/409/503).
+- Operations automation: scheduler tick phases (stale cancel, planning
+  idempotence, due execution through the shared pipeline with exactly one
+  provider call), bounded deterministic retry scheduling, reconciliation
+  status derivation, operations API contracts incl. merchant scoping.
 - Web: pure formatting logic (`formatInr`, `formatMinorAmount`, `formatPercent`).
 
 Integration-style tests against a live PostgreSQL run naturally during local
@@ -493,7 +537,7 @@ first data-bearing phase.
 | 3 ✅ | Revenue leakage detection | `detection/` rules + detector, `services/revenue-leakage.service.ts`, `RecoveryOpportunityRepository`, `routes/opportunities.ts` |
 | 4 ✅ | Decision engine | `decision/` engine + features + failure categories, `services/recovery-decision.service.ts`, `RecoveryDecisionRepository`, `routes/decisions.ts` |
 | 5 ✅ | AI advisory intelligence | `ai/` prompt + safety guard + OpenAI-compatible provider, `services/recovery-ai-advisor.service.ts`, `recovery_ai_advice` store, `/opportunities/:id/ai-advice` |
-| 6 ✅ | Controlled execution | `domain/recovery-execution.ts`, `execution/` safety + state machine + Razorpay retry adapter, `services/recovery-execution.service.ts`, `routes/executions.ts`, `recovery_executions` table |
+| 6 ✅ | Controlled execution | `domain/recovery-execution.ts`, `execution/` safety + state machine + Razorpay retry adapter, `services/recovery-execution.service.ts`, `routes/executions.ts`, `recovery_executions` table | + Phase 7 operations scheduler (`services/recovery-operation-scheduler.service.ts`, `/operations/*`, runtime timer)
 | 5 | Simulation/replay | `services/simulation` reusing event normalization |
 | 6–8 | Intelligence/context/pattern/memory | `services/intelligence/*`, new repos |
 | 7 | AI decision agent | behind the existing decision-engine interface; deterministic fallbacks required |

@@ -25,6 +25,7 @@ import type {
   RecoveryAIAdviceStore,
 } from '../domain/recovery-ai-advice.js';
 import type {
+  ExecutionStatus,
   NewRecoveryExecutionData,
   RecoveryExecutionRow,
   RecoveryExecutionStore,
@@ -275,6 +276,10 @@ export function createPrismaRecoveryDecisionStore(client: PrismaClient): Recover
       });
       return toDecisionRow(row);
     },
+    async findById(id) {
+      const row = await client.recoveryDecision.findUnique({ where: { id } });
+      return row ? toDecisionRow(row) : null;
+    },
     async findByOpportunityAndEngineVersion(opportunityId, engineVersion) {
       const row = await client.recoveryDecision.findUnique({
         where: { opportunityId_engineVersion: { opportunityId, engineVersion } },
@@ -393,6 +398,10 @@ export function createPrismaRecoveryExecutionStore(
       const row = await client.recoveryExecution.findUnique({ where: { idempotencyKey } });
       return row ?? null;
     },
+    async findById(id) {
+      const row = await client.recoveryExecution.findUnique({ where: { id } });
+      return row ?? null;
+    },
     async updateStatus(args) {
       const row = await client.recoveryExecution.update({
         where: { id: args.id },
@@ -403,6 +412,32 @@ export function createPrismaRecoveryExecutionStore(
           ...(args.failureCode !== undefined ? { failureCode: args.failureCode } : {}),
           ...(args.failureReason !== undefined ? { failureReason: args.failureReason } : {}),
         },
+      });
+      return row;
+    },
+    // Conditional update establishes ownership atomically: exactly one caller
+    // sees count === 1; concurrent racers get null and must stand down.
+    async transitionStatus(args) {
+      const updated = await client.recoveryExecution.updateMany({
+        where: { id: args.id, status: args.from },
+        data: {
+          status: args.to,
+          ...(args.startedAt !== undefined ? { startedAt: args.startedAt } : {}),
+          ...(args.completedAt !== undefined ? { completedAt: args.completedAt } : {}),
+          ...(args.failureCode !== undefined ? { failureCode: args.failureCode } : {}),
+          ...(args.failureReason !== undefined ? { failureReason: args.failureReason } : {}),
+        },
+      });
+      if (updated.count !== 1) {
+        return null;
+      }
+      const row = await client.recoveryExecution.findUnique({ where: { id: args.id } });
+      return row;
+    },
+    async setNextAttemptAt({ id, nextAttemptAt }) {
+      const row = await client.recoveryExecution.update({
+        where: { id },
+        data: { nextAttemptAt },
       });
       return row;
     },
@@ -418,6 +453,48 @@ export function createPrismaRecoveryExecutionStore(
         orderBy: [{ attempt: 'desc' }, { createdAt: 'desc' }],
       });
       return row ?? null;
+    },
+    async findActiveByOpportunity(opportunityId) {
+      const ACTIVE: ExecutionStatus[] = ['PENDING', 'AUTHORIZED', 'EXECUTING', 'SUCCEEDED'];
+      const row = await client.recoveryExecution.findFirst({
+        where: { opportunityId, status: { in: ACTIVE } },
+        orderBy: [{ attempt: 'desc' }, { createdAt: 'desc' }],
+      });
+      return row ?? null;
+    },
+    async findDuePending({ dueBefore, limit }) {
+      return client.recoveryExecution.findMany({
+        where: {
+          status: 'PENDING',
+          OR: [
+            { nextAttemptAt: { lte: dueBefore } },
+            { AND: [{ nextAttemptAt: null }, { requestedAt: { lte: dueBefore } }] },
+          ],
+        },
+        orderBy: [{ nextAttemptAt: 'asc' }, { requestedAt: 'asc' }],
+        take: limit,
+      });
+    },
+    async findStalePending({ createdBefore, limit }) {
+      return client.recoveryExecution.findMany({
+        where: { status: 'PENDING', createdAt: { lt: createdBefore } },
+        orderBy: { createdAt: 'asc' },
+        take: limit,
+      });
+    },
+    async listRecent(filters) {
+      return client.recoveryExecution.findMany({
+        where: filters.status !== undefined ? { status: filters.status } : undefined,
+        orderBy: { createdAt: 'desc' },
+        take: filters.limit,
+      });
+    },
+    async countByStatus() {
+      const grouped = await client.recoveryExecution.groupBy({
+        by: ['status'],
+        _count: { _all: true },
+      });
+      return grouped.map((group) => ({ status: group.status, count: group._count._all }));
     },
     async countRetryAttempts(opportunityId) {
       return client.recoveryExecution.count({

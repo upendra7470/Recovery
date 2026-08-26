@@ -88,11 +88,22 @@ export function createRecoveryExecutionStoreMock(
   return {
     insert: vi.fn(async (data: NewRecoveryExecutionData) => sampleExecutionRow(data)),
     findByIdempotencyKey: vi.fn(async (): Promise<RecoveryExecutionRow | null> => null),
+    findById: vi.fn(async (): Promise<RecoveryExecutionRow | null> => null),
     updateStatus: vi.fn(async ({ id }: { id: string; status: ExecutionStatus }) =>
       sampleExecutionRow({ id })
     ),
+    transitionStatus: vi.fn(
+      async ({ id }: { id: string; from: ExecutionStatus; to: ExecutionStatus }) =>
+        sampleExecutionRow({ id })
+    ),
+    setNextAttemptAt: vi.fn(async ({ id }: { id: string }) => sampleExecutionRow({ id })),
     listByOpportunity: vi.fn(async (): Promise<RecoveryExecutionRow[]> => []),
     findLatestByOpportunityAndAction: vi.fn(async (): Promise<RecoveryExecutionRow | null> => null),
+    findActiveByOpportunity: vi.fn(async (): Promise<RecoveryExecutionRow | null> => null),
+    findDuePending: vi.fn(async (): Promise<RecoveryExecutionRow[]> => []),
+    findStalePending: vi.fn(async (): Promise<RecoveryExecutionRow[]> => []),
+    listRecent: vi.fn(async (): Promise<RecoveryExecutionRow[]> => []),
+    countByStatus: vi.fn(async () => []),
     countRetryAttempts: vi.fn(async () => 0),
     ...overrides,
   };
@@ -113,6 +124,7 @@ export function createRecoveryDecisionStoreMock(
 ): RecoveryDecisionStore {
   return {
     upsert: vi.fn(async (data: NewRecoveryDecisionData) => sampleDecisionRow(data)),
+    findById: vi.fn(async (): Promise<RecoveryDecisionRow | null> => null),
     findByOpportunityAndEngineVersion: vi.fn(
       async (): Promise<RecoveryDecisionRow | null> => null
     ),
@@ -132,6 +144,15 @@ export function createRecoveryDecisionStoreMock(
 export class InMemoryRecoveryDecisionStore implements RecoveryDecisionStore {
   readonly rows = new Map<string, RecoveryDecisionRow>();
   upsertCalls: NewRecoveryDecisionData[] = [];
+
+  async findById(id: string): Promise<RecoveryDecisionRow | null> {
+    for (const row of this.rows.values()) {
+      if (row.id === id) {
+        return row;
+      }
+    }
+    return null;
+  }
 
   async upsert(data: NewRecoveryDecisionData): Promise<RecoveryDecisionRow> {
     this.upsertCalls.push(data);
@@ -729,6 +750,9 @@ function sampleExecutionRow(overrides: Partial<RecoveryExecutionRow> = {}): Reco
     decisionId: randomUUID(),
     action: 'RETRY',
     status: 'PENDING',
+    origin: 'MANUAL',
+    nextAttemptAt: null,
+    scheduledAt: null,
     attempt: 1,
     idempotencyKey: `key-${randomUUID()}`,
     provider: null,
@@ -761,6 +785,9 @@ export class InMemoryRecoveryExecutionStore implements RecoveryExecutionStore {
     }
     const row: RecoveryExecutionRow = {
       ...data,
+      origin: data.origin ?? 'MANUAL',
+      nextAttemptAt: data.nextAttemptAt ?? null,
+      scheduledAt: data.scheduledAt ?? null,
       id: randomUUID(),
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -771,6 +798,58 @@ export class InMemoryRecoveryExecutionStore implements RecoveryExecutionStore {
 
   async findByIdempotencyKey(idempotencyKey: string): Promise<RecoveryExecutionRow | null> {
     return this.rows.get(idempotencyKey) ?? null;
+  }
+
+  async findById(id: string): Promise<RecoveryExecutionRow | null> {
+    for (const row of this.rows.values()) {
+      if (row.id === id) {
+        return row;
+      }
+    }
+    return null;
+  }
+
+  async transitionStatus(args: {
+    id: string;
+    from: ExecutionStatus;
+    to: ExecutionStatus;
+    startedAt?: Date;
+    completedAt?: Date;
+    failureCode?: string | null;
+    failureReason?: string | null;
+  }): Promise<RecoveryExecutionRow | null> {
+    for (const [key, row] of this.rows.entries()) {
+      if (row.id === args.id && row.status === args.from) {
+        const updated: RecoveryExecutionRow = {
+          ...row,
+          status: args.to,
+          startedAt: args.startedAt ?? row.startedAt,
+          completedAt: args.completedAt ?? row.completedAt,
+          failureCode: args.failureCode !== undefined ? args.failureCode : row.failureCode,
+          failureReason:
+            args.failureReason !== undefined ? args.failureReason : row.failureReason,
+          updatedAt: new Date(),
+        };
+        this.rows.set(key, updated);
+        return updated;
+      }
+    }
+    return null;
+  }
+
+  async setNextAttemptAt(args: { id: string; nextAttemptAt: Date }): Promise<RecoveryExecutionRow> {
+    for (const [key, row] of this.rows.entries()) {
+      if (row.id === args.id) {
+        const updated: RecoveryExecutionRow = {
+          ...row,
+          nextAttemptAt: args.nextAttemptAt,
+          updatedAt: new Date(),
+        };
+        this.rows.set(key, updated);
+        return updated;
+      }
+    }
+    throw new Error(`Execution ${args.id} not found`);
   }
 
   async updateStatus(args: {
@@ -814,6 +893,52 @@ export class InMemoryRecoveryExecutionStore implements RecoveryExecutionStore {
       .filter((row) => row.opportunityId === opportunityId && row.action === action)
       .sort((a, b) => b.attempt - a.attempt || b.createdAt.getTime() - a.createdAt.getTime());
     return matches[0] ?? null;
+  }
+
+  async findActiveByOpportunity(opportunityId: string): Promise<RecoveryExecutionRow | null> {
+    const ACTIVE: ExecutionStatus[] = ['PENDING', 'AUTHORIZED', 'EXECUTING', 'SUCCEEDED'];
+    const matches = [...this.rows.values()]
+      .filter((row) => row.opportunityId === opportunityId && ACTIVE.includes(row.status))
+      .sort((a, b) => b.attempt - a.attempt || b.createdAt.getTime() - a.createdAt.getTime());
+    return matches[0] ?? null;
+  }
+
+  async findDuePending(args: { dueBefore: Date; limit: number }): Promise<RecoveryExecutionRow[]> {
+    const due = [...this.rows.values()].filter(
+      (row) =>
+        row.status === 'PENDING' &&
+        (row.nextAttemptAt ?? row.requestedAt) <= args.dueBefore
+    );
+    due.sort((a, b) => {
+      const aDue = (a.nextAttemptAt ?? a.requestedAt).getTime();
+      const bDue = (b.nextAttemptAt ?? b.requestedAt).getTime();
+      return aDue - bDue;
+    });
+    return due.slice(0, args.limit);
+  }
+
+  async findStalePending(args: { createdBefore: Date; limit: number }): Promise<RecoveryExecutionRow[]> {
+    return [...this.rows.values()]
+      .filter(
+        (row) => row.status === 'PENDING' && row.createdAt < args.createdBefore
+      )
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+      .slice(0, args.limit);
+  }
+
+  async listRecent(filters: { status?: ExecutionStatus; limit: number }): Promise<RecoveryExecutionRow[]> {
+    return [...this.rows.values()]
+      .filter((row) => filters.status === undefined || row.status === filters.status)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, filters.limit);
+  }
+
+  async countByStatus(): Promise<{ status: ExecutionStatus; count: number }[]> {
+    const counts = new Map<ExecutionStatus, number>();
+    for (const row of this.rows.values()) {
+      counts.set(row.status, (counts.get(row.status) ?? 0) + 1);
+    }
+    return [...counts.entries()].map(([status, count]) => ({ status, count }));
   }
 
   async countRetryAttempts(opportunityId: string): Promise<number> {

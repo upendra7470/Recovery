@@ -183,6 +183,7 @@ export interface DecisionsOverviewMetrics {
  */
 export interface RecoveryDecisionStore {
   upsert(data: NewRecoveryDecisionData): Promise<RecoveryDecisionRow>;
+  findById(id: string): Promise<RecoveryDecisionRow | null>;
   findByOpportunityAndEngineVersion(
     opportunityId: string,
     engineVersion: string

@@ -39,6 +39,8 @@ export type ExecutionRequestResult =
   | { outcome: 'disabled'; assessment: ExecutionAssessment }
   | {
       outcome: 'blocked';
+
+
       reason: ExecutionBlockReason;
       detail: string;
       execution: RecoveryExecutionRow | null;
@@ -47,6 +49,17 @@ export type ExecutionRequestResult =
   | { outcome: 'created'; execution: RecoveryExecutionRow }
   | { outcome: 'provider-rejected'; execution: RecoveryExecutionRow }
   | { outcome: 'provider-unavailable'; execution: RecoveryExecutionRow; reason: string };
+
+export type ScheduledRunResult =
+  | { outcome: 'not-found' }
+  | { outcome: 'not-pending'; execution: RecoveryExecutionRow }
+  | { outcome: 'already-in-progress' }
+  | { outcome: 'blocked-audited'; execution: RecoveryExecutionRow; reason: string; detail: string }
+  | { outcome: 'rescheduled'; execution: RecoveryExecutionRow }
+  | { outcome: 'accepted'; execution: RecoveryExecutionRow }
+  | { outcome: 'failed-permanent'; execution: RecoveryExecutionRow }
+  | { outcome: 'failed-retryable'; execution: RecoveryExecutionRow; reason: string }
+  | { outcome: 'cancelled'; execution: RecoveryExecutionRow; reason: string };
 
 /**
  * Controlled recovery execution orchestration.
@@ -175,7 +188,10 @@ export class RecoveryExecutionService {
         decisionId: assessment.decision.id,
         action,
         status: 'BLOCKED',
+        origin: 'MANUAL',
         attempt,
+        nextAttemptAt: null,
+        scheduledAt: null,
         idempotencyKey,
         provider: null,
         providerPaymentId: assessment.opportunity.providerPaymentId,
@@ -209,7 +225,10 @@ export class RecoveryExecutionService {
       decisionId: assessment.decision.id,
       action,
       status: 'PENDING',
+      origin: 'MANUAL',
       attempt,
+      nextAttemptAt: null,
+      scheduledAt: null,
       idempotencyKey,
       provider: this.provider?.provider ?? null,
       providerPaymentId: assessment.opportunity.providerPaymentId,
@@ -232,6 +251,93 @@ export class RecoveryExecutionService {
     return this.executeRetry(assessment, execution);
   }
 
+  /**
+   * Phase 7 entry point for AUTOMATED runs. Shares the exact same
+   * assess → gate → state-machine → provider pipeline as manual execution;
+   * the only difference is that the PENDING record already exists (created by
+   * the scheduler's planning phase) and ownership is established with an
+   * atomic conditional transition so concurrent ticks/manual races are safe.
+   */
+  async runScheduledExecution(executionId: string): Promise<ScheduledRunResult> {
+    const scheduled = await this.executions.findById(executionId);
+    if (scheduled === null) {
+      return { outcome: 'not-found' };
+    }
+    if (scheduled.status !== 'PENDING') {
+      return { outcome: 'not-pending', execution: scheduled };
+    }
+
+    // Fresh stale-aware assessment through the shared pipeline.
+    const assessment = await this.assess(scheduled.opportunityId);
+    if (assessment === null) {
+      const cancelled = await this.executions.transitionStatus({
+        id: executionId,
+        from: 'PENDING',
+        to: 'CANCELLED',
+        completedAt: new Date(),
+        failureCode: 'OPPORTUNITY_MISSING',
+        failureReason: 'The opportunity no longer exists.',
+      });
+      return cancelled === null
+        ? { outcome: 'already-in-progress' }
+        : { outcome: 'cancelled', execution: cancelled, reason: 'opportunity_missing' };
+    }
+
+    if (!assessment.eligibility.eligible) {
+      // Audited deterministic block — PENDING→BLOCKED is a legal transition.
+      const blocked = await this.executions.transitionStatus({
+        id: executionId,
+        from: 'PENDING',
+        to: 'BLOCKED',
+        completedAt: new Date(),
+        failureCode: assessment.eligibility.reason,
+        failureReason: assessment.eligibility.detail,
+      });
+      if (blocked === null) {
+        return { outcome: 'already-in-progress' };
+      }
+      this.logger?.warn(
+        {
+          event: 'scheduled_execution_blocked',
+          opportunityId: scheduled.opportunityId,
+          executionId,
+          reason: assessment.eligibility.reason,
+        },
+        'Scheduled execution blocked by the deterministic safety gate'
+      );
+      return {
+        outcome: 'blocked-audited',
+        execution: blocked,
+        reason: assessment.eligibility.reason!,
+        detail: assessment.eligibility.detail ?? 'Blocked by the safety gate.',
+      };
+    }
+
+    if (assessment.eligibility.action === 'WAIT') {
+      // Still WAITing per policy — push the due time forward, keep PENDING.
+      const rescheduled = await this.executions.setNextAttemptAt({
+        id: executionId,
+        nextAttemptAt: new Date(Date.now() + 60 * 60 * 1000),
+      });
+      return { outcome: 'rescheduled', execution: rescheduled };
+    }
+
+    // RETRY path: claim ownership atomically before any provider interaction.
+    const claimed = await this.executions.transitionStatus({
+      id: executionId,
+      from: 'PENDING',
+      to: 'AUTHORIZED',
+      startedAt: new Date(),
+    });
+    if (claimed === null) {
+      // Another worker (or a racing manual request) owns this execution.
+      return { outcome: 'already-in-progress' };
+    }
+
+    const result = await this.runAuthorizedRetry(assessment, claimed);
+    return mapToScheduledOutcome(result);
+  }
+
   listExecutions(opportunityId: string): Promise<RecoveryExecutionRow[]> {
     return this.executions.listByOpportunity(opportunityId);
   }
@@ -242,13 +348,38 @@ export class RecoveryExecutionService {
     assessment: ExecutionAssessment,
     pending: RecoveryExecutionRow
   ): Promise<ExecutionRequestResult> {
-    const opportunityId = pending.opportunityId;
-
     requireTransition(pending.status, 'AUTHORIZED');
-    let execution = await this.executions.updateStatus({
+    const authorized = await this.executions.updateStatus({
       id: pending.id,
       status: 'AUTHORIZED',
+      startedAt: new Date(),
     });
+
+    if (this.provider === null) {
+      requireTransition('AUTHORIZED', 'CANCELLED');
+      const execution = await this.executions.updateStatus({
+        id: authorized.id,
+        status: 'CANCELLED',
+        completedAt: new Date(),
+        failureCode: 'PROVIDER_UNAVAILABLE',
+        failureReason: 'No recovery execution provider is configured.',
+      });
+      return { outcome: 'provider-unavailable', execution, reason: 'not_configured' };
+    }
+
+    return this.runAuthorizedRetry(assessment, authorized);
+  }
+
+  /**
+   * Shared provider-attempt pipeline for MANUAL and AUTOMATED runs. The row
+   * must already be AUTHORIZED (ownership established by the caller).
+   */
+  private async runAuthorizedRetry(
+    assessment: ExecutionAssessment,
+    authorized: RecoveryExecutionRow
+  ): Promise<ExecutionRequestResult> {
+    let execution = authorized;
+    const opportunityId = authorized.opportunityId;
 
     if (this.provider === null) {
       requireTransition('AUTHORIZED', 'CANCELLED');
@@ -261,13 +392,6 @@ export class RecoveryExecutionService {
       });
       return { outcome: 'provider-unavailable', execution, reason: 'not_configured' };
     }
-
-    requireTransition('AUTHORIZED', 'EXECUTING');
-    execution = await this.executions.updateStatus({
-      id: execution.id,
-      status: 'EXECUTING',
-      startedAt: new Date(),
-    });
 
     let result;
     try {
@@ -408,6 +532,31 @@ function toEligibility(verdict: ExecutionSafetyVerdict): ExecutionEligibility {
     reason: verdict.reason,
     detail: verdict.detail,
   };
+}
+
+/** Transient provider failures are retryable; deterministic ones are not. */
+const RETRYABLE_PROVIDER_REASONS: readonly string[] = [
+  'timeout',
+  'rate_limited',
+  'network_error',
+  'provider_error',
+];
+
+function mapToScheduledOutcome(result: ExecutionRequestResult): ScheduledRunResult {
+  switch (result.outcome) {
+    case 'created':
+      return { outcome: 'accepted', execution: result.execution };
+    case 'provider-rejected':
+      return { outcome: 'failed-permanent', execution: result.execution };
+    case 'provider-unavailable':
+      if (RETRYABLE_PROVIDER_REASONS.includes(result.reason)) {
+        return { outcome: 'failed-retryable', execution: result.execution, reason: result.reason };
+      }
+      return { outcome: 'cancelled', execution: result.execution, reason: result.reason };
+    default:
+      // Manual-only outcomes cannot occur on the scheduled path.
+      throw new Error(`Unexpected outcome on scheduled path: ${String(result.outcome)}`);
+  }
 }
 
 function buildIdempotencyKey(

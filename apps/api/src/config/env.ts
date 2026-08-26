@@ -66,6 +66,18 @@ export const envSchema = z.object({
   /** Gateway endpoint for retry submission; unset ⇒ provider reports not_configured. */
   RECOVERY_EXECUTION_API_URL: emptyToUndefined(z.url().optional()),
   RECOVERY_EXECUTION_API_KEY: emptyToUndefined(z.string().min(1).optional()),
+  // ---------------------------------------------------------------------------
+  // Recovery operations & automation (Phase 7) -- DISABLED by default. The
+  // scheduler reuses the Phase 6 execution pipeline and safety gate verbatim.
+  // ---------------------------------------------------------------------------
+  RECOVERY_AUTOMATION_ENABLED: booleanFlag(false),
+  RECOVERY_AUTOMATION_TICK_SECONDS: z.coerce.number().int().min(5).max(3600).default(30),
+  /** Per-opportunity cap on automated retry attempts. */
+  RECOVERY_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
+  /** PENDING executions older than this are deterministically CANCELLED. */
+  RECOVERY_OPERATION_MAX_AGE_HOURS: z.coerce.number().int().min(1).max(8760).default(72),
+  /** Deterministic exponential backoff base between automated attempts. */
+  RECOVERY_RETRY_BACKOFF_SECONDS: z.coerce.number().int().min(1).max(86400).default(300),
 }).superRefine((env, ctx) => {
   if (env.AI_ENABLED) {
     for (const field of ['AI_MODEL', 'AI_API_KEY', 'AI_BASE_URL'] as const) {

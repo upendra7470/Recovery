@@ -114,6 +114,34 @@ describe('parseEnv', () => {
   it('rejects a non-integer DETECTION_WINDOW_HOURS', () => {
     expect(() => parseEnv({ ...VALID_BASE, DETECTION_WINDOW_HOURS: '1.5' })).toThrow(ConfigError);
   });
+
+  it('disables recovery automation by default and applies conservative bounds', () => {
+    const env = parseEnv({ DATABASE_URL: 'postgresql://u:p@localhost:5432/db' });
+    expect(env.RECOVERY_AUTOMATION_ENABLED).toBe(false);
+    expect(env.RECOVERY_MAX_ATTEMPTS).toBe(3);
+    expect(env.RECOVERY_OPERATION_MAX_AGE_HOURS).toBe(72);
+    expect(env.RECOVERY_RETRY_BACKOFF_SECONDS).toBe(300);
+    expect(env.RECOVERY_AUTOMATION_TICK_SECONDS).toBe(30);
+  });
+
+  it('parses strict automation booleans (the string "false" is false)', () => {
+    const off = parseEnv({ ...VALID_BASE, RECOVERY_AUTOMATION_ENABLED: 'false' });
+    expect(off.RECOVERY_AUTOMATION_ENABLED).toBe(false);
+    expect(() =>
+      parseEnv({ ...VALID_BASE, RECOVERY_AUTOMATION_ENABLED: 'TRUE' })
+    ).toThrow(ConfigError);
+  });
+
+  it('rejects out-of-range automation values', () => {
+    expect(() => parseEnv({ ...VALID_BASE, RECOVERY_MAX_ATTEMPTS: '0' })).toThrow(ConfigError);
+    expect(() => parseEnv({ ...VALID_BASE, RECOVERY_MAX_ATTEMPTS: '11' })).toThrow(ConfigError);
+    expect(() =>
+      parseEnv({ ...VALID_BASE, RECOVERY_RETRY_BACKOFF_SECONDS: '0' })
+    ).toThrow(ConfigError);
+    expect(() =>
+      parseEnv({ ...VALID_BASE, RECOVERY_AUTOMATION_TICK_SECONDS: '2' })
+    ).toThrow(ConfigError);
+  });
 });
 
 describe('loadEnv', () => {

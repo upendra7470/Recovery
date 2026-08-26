@@ -11,8 +11,8 @@ import {
   DeterministicDecisionEngine,
 } from '../decision/engine.js';
 import { extractDecisionFeatures } from '../decision/features.js';
-import type { RecoveryOpportunityRepository } from '../repositories/recovery-opportunity.repository.js';
 import type { RecoveryDecisionRepository } from '../repositories/recovery-decision.repository.js';
+import type { RecoveryOpportunityRepository } from '../repositories/recovery-opportunity.repository.js';
 
 export interface EvaluationOutcome {
   opportunityId: string;
@@ -98,6 +98,10 @@ export class RecoveryDecisionService {
 
   overviewMetrics(merchantId?: string) {
     return this.decisions.overviewMetrics(merchantId);
+  }
+
+  findDecisionById(id: string) {
+    return this.decisions.findById(id);
   }
 
   /**

@@ -88,6 +88,13 @@ enum ExecutionStatus {
   CANCELLED
 }
 
+/// What triggered an execution record. Mirrors ExecutionOrigin in
+/// src/domain/recovery-execution.ts.
+enum ExecutionOrigin {
+  MANUAL
+  AUTOMATED
+}
+
 model Merchant {
   id              String                @id @default(uuid()) @db.Uuid
   name            String
@@ -288,6 +295,10 @@ model RecoveryExecution {
   decisionId        String           @db.Uuid
   action            RecommendedAction
   status            ExecutionStatus
+  origin            ExecutionOrigin  @default(MANUAL)
+  /// When this automated operation becomes due for the scheduler.
+  nextAttemptAt     DateTime?
+  scheduledAt       DateTime?
   /// 1-based attempt number among non-blocked executions of the opportunity.
   attempt           Int              @default(1)
   /// Stable key (opportunity + decision + action + attempt) preventing
@@ -309,7 +320,7 @@ model RecoveryExecution {
   @@index([opportunityId])
   @@index([merchantId])
   @@index([decisionId])
-  @@index([status])
+  @@index([status, nextAttemptAt])
   @@index([createdAt])
   @@map("recovery_executions")
 }

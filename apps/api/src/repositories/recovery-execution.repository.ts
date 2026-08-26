@@ -24,6 +24,10 @@ export class RecoveryExecutionRepository {
     return this.store.findByIdempotencyKey(idempotencyKey);
   }
 
+  findById(id: string): Promise<RecoveryExecutionRow | null> {
+    return this.store.findById(id);
+  }
+
   updateStatus(args: {
     id: string;
     status: ExecutionStatus;
@@ -33,6 +37,46 @@ export class RecoveryExecutionRepository {
     failureReason?: string | null;
   }): Promise<RecoveryExecutionRow> {
     return this.store.updateStatus(args);
+  }
+
+  /**
+   * Atomic conditional transition — returns the updated row when ownership
+   * was established, or null when another worker won / transition invalid.
+   */
+  transitionStatus(args: {
+    id: string;
+    from: ExecutionStatus;
+    to: ExecutionStatus;
+    startedAt?: Date;
+    completedAt?: Date;
+    failureCode?: string | null;
+    failureReason?: string | null;
+  }): Promise<RecoveryExecutionRow | null> {
+    return this.store.transitionStatus(args);
+  }
+
+  setNextAttemptAt(args: { id: string; nextAttemptAt: Date }): Promise<RecoveryExecutionRow> {
+    return this.store.setNextAttemptAt(args);
+  }
+
+  findDuePending(args: { dueBefore: Date; limit: number }): Promise<RecoveryExecutionRow[]> {
+    return this.store.findDuePending(args);
+  }
+
+  findStalePending(args: { createdBefore: Date; limit: number }): Promise<RecoveryExecutionRow[]> {
+    return this.store.findStalePending(args);
+  }
+
+  findActiveByOpportunity(opportunityId: string): Promise<RecoveryExecutionRow | null> {
+    return this.store.findActiveByOpportunity(opportunityId);
+  }
+
+  listRecent(filters: { status?: ExecutionStatus; limit: number }): Promise<RecoveryExecutionRow[]> {
+    return this.store.listRecent(filters);
+  }
+
+  countByStatus(): Promise<{ status: ExecutionStatus; count: number }[]> {
+    return this.store.countByStatus();
   }
 
   listByOpportunity(opportunityId: string): Promise<RecoveryExecutionRow[]> {
