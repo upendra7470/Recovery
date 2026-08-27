@@ -39,14 +39,12 @@ export type ExecutionRequestResult =
   | { outcome: 'disabled'; assessment: ExecutionAssessment }
   | {
       outcome: 'blocked';
-
-
       reason: ExecutionBlockReason;
       detail: string;
       execution: RecoveryExecutionRow | null;
     }
-  | { outcome: 'replayed'; execution: RecoveryExecutionRow }
-  | { outcome: 'created'; execution: RecoveryExecutionRow }
+  | { outcome: 'replayed'; execution: RecoveryExecutionRow; providerReferenceId?: string }
+  | { outcome: 'created'; execution: RecoveryExecutionRow; providerReferenceId?: string }
   | { outcome: 'provider-rejected'; execution: RecoveryExecutionRow }
   | { outcome: 'provider-unavailable'; execution: RecoveryExecutionRow; reason: string };
 
@@ -440,7 +438,7 @@ export class RecoveryExecutionService {
           },
           'Provider accepted the retry request — awaiting payment outcome'
         );
-        return { outcome: 'created', execution };
+        return { outcome: 'created', execution, providerReferenceId: result.providerReferenceId };
       }
       case 'rejected': {
         requireTransition('EXECUTING', 'FAILED');

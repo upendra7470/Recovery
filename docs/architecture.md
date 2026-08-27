@@ -2,7 +2,7 @@
 
 This document describes the Phase 1 foundation, the Phase 2 payment event
 ingestion pipeline, and the intended target architecture that later phases will
-grow into. Nothing described as "future" is implemented yet.
+grow into.
 
 ## 1. System context (target state)
 
@@ -418,7 +418,7 @@ names. Log levels are environment-driven; development uses pretty printing.
 Future phases can attach metrics/tracing without changing call sites because all
 logging flows through one factory (`lib/logger.ts`).
 
-## 7. Security posture (Phase 1)
+## 7. Security posture
 
 - Secrets only via environment variables; `.env*` gitignored; no credentials in
   source or database (`PaymentAccount` stores provider metadata, never keys).
@@ -426,9 +426,11 @@ logging flows through one factory (`lib/logger.ts`).
 - Zod validation at every future ingress point; strict schemas reject unknown keys.
 - Security headers on both apps (API: nosniff/DENY/no-referrer/CSP/no-store;
   web: nosniff/DENY/referrer-policy/permissions-policy via `next.config.mjs`).
-- No authentication yet — documented gap, planned before any multi-tenant or
-  hosted use. The dashboard is local-development-only until then.
-- No wildcard CORS.
+- Authentication via session cookies (Phase 8); public paths excluded;
+  unauthenticated requests to protected paths rejected with 401.
+- No wildcard CORS; credentialed CORS restricted to configured origin only.
+- Razorpay API key secret never logged, persisted, or exposed to frontend;
+  only used in Basic Auth header for Order API calls.
 
 ## 8. Data model evolution
 
@@ -481,11 +483,15 @@ state machine, unique `idempotency_key`, attempt counter, normalized failure
 code/reason, cascade FKs to opportunity and decision, `SET NULL` merchant,
 indexes on opportunity/merchant/decision/status/createdAt.
 
-Later phases will add (non-exhaustive): simulation/replay datasets (P5),
-decisions + rationale + policy evaluations (P6–P8), recovery actions + attempts
-(P9), outcome verifications (P10), append-only recovery ledger entries (P11),
-merchant memory embeddings/summaries (P12). Each lands as its own migration;
-enums evolve additively.
+Phase 7 extended `recovery_executions` with scheduling fields (migration
+`20260826120833_add_execution_scheduling_fields`): `origin` (MANUAL/AUTOMATED),
+`nextAttemptAt`, `scheduledAt`, and a composite `(status, next_attempt_at)`
+index powering due-work discovery.
+
+Phase 9-10 extended the execution flow with real Razorpay Order API integration
+and frontend Checkout flow. The database schema remains unchanged — the
+provider reference ID (order ID) is returned in the API response for Checkout
+but not persisted in the execution record.
 
 ## 9. Testing strategy
 
@@ -537,16 +543,16 @@ first data-bearing phase.
 | 3 ✅ | Revenue leakage detection | `detection/` rules + detector, `services/revenue-leakage.service.ts`, `RecoveryOpportunityRepository`, `routes/opportunities.ts` |
 | 4 ✅ | Decision engine | `decision/` engine + features + failure categories, `services/recovery-decision.service.ts`, `RecoveryDecisionRepository`, `routes/decisions.ts` |
 | 5 ✅ | AI advisory intelligence | `ai/` prompt + safety guard + OpenAI-compatible provider, `services/recovery-ai-advisor.service.ts`, `recovery_ai_advice` store, `/opportunities/:id/ai-advice` |
-| 6 ✅ | Controlled execution | `domain/recovery-execution.ts`, `execution/` safety + state machine + Razorpay retry adapter, `services/recovery-execution.service.ts`, `routes/executions.ts`, `recovery_executions` table | + Phase 7 operations scheduler (`services/recovery-operation-scheduler.service.ts`, `/operations/*`, runtime timer)
-| 5 | Simulation/replay | `services/simulation` reusing event normalization |
-| 6–8 | Intelligence/context/pattern/memory | `services/intelligence/*`, new repos |
-| 7 | AI decision agent | behind the existing decision-engine interface; deterministic fallbacks required |
-| 8 | Policy engine | pure functions over decisions; fail-closed defaults |
-| 9 | Action orchestrator | `services/actions` + outbox pattern on existing Postgres |
-| 10 | Outcome verification | consumes orchestrator results, writes ledger candidates |
-| 11 | Recovery ledger | append-only table + read APIs |
-| 12 | Adaptive memory | evolves merchant memory schemas/consumers |
-| 13–15 | Modules, voice, full dashboard | new route modules + dashboard sections |
+| 6 ✅ | Controlled execution | `domain/recovery-execution.ts`, `execution/` safety + state machine + Razorpay retry adapter, `services/recovery-execution.service.ts`, `routes/executions.ts`, `recovery_executions` table |
+| 7 ✅ | Operations & automation | `services/recovery-operation-scheduler.service.ts`, `/operations/*`, runtime timer |
+| 8 ✅ | Authentication | `plugins/authentication.ts`, session cookies, tenant isolation |
+| 9 ✅ | Real Razorpay integration | `execution/providers/razorpay-retry.adapter.ts` (real API), Basic Auth, order creation |
+| 10 ✅ | Demo-ready customer flow | Frontend Checkout integration, Checkout-safe response data |
+| 11 | Outcome verification | consumes orchestrator results, writes ledger candidates |
+| 12 | Recovery ledger | append-only table + read APIs |
+| 13 | Synthetic data + simulation | `services/simulation` reusing event normalization |
+| 14 | Adaptive memory | evolves merchant memory schemas/consumers |
+| 15–17 | Modules, voice, full dashboard | new route modules + dashboard sections |
 
 ## 11. Future ML extension point (documented, not implemented)
 

@@ -21,6 +21,11 @@ export interface ExecutionSummaryResponse {
   failureReason: string | null;
 }
 
+export interface CheckoutData {
+  orderId: string;
+  keyId: string;
+}
+
 export interface ExecutionsListResponse {
   opportunityId: string;
   eligibility: ExecutionEligibility;
@@ -36,6 +41,7 @@ export interface ExecutionResultResponse {
     | 'provider-unavailable'
     | 'blocked';
   execution: ExecutionSummaryResponse;
+  checkout?: CheckoutData;
 }
 
 function toSummary(row: RecoveryExecutionRow): ExecutionSummaryResponse {
@@ -115,6 +121,16 @@ export const executionRoutes: FastifyPluginAsync = async (app) => {
             outcome: result.outcome,
             execution: toSummary(result.execution),
           };
+
+          // Include Checkout-safe data when an order was created (not WAIT)
+          if (result.outcome === 'created' && result.providerReferenceId !== undefined) {
+            const config = app.config;
+            body.checkout = {
+              orderId: result.providerReferenceId,
+              keyId: config.RAZORPAY_KEY_ID ?? '',
+            };
+          }
+
           return reply.status(status).send(body);
         }
       }

@@ -274,4 +274,24 @@ describe('Webhooks route detection integration', () => {
     expect(eventStore.rows.size).toBe(0);
     expect(opportunityStore.rows.size).toBe(0);
   });
+
+  it('does not create duplicate recovery events on duplicate captured webhooks', async () => {
+    await signedPost(PAYMENT_FAILED_PAYLOAD);
+    const firstCapture = await signedPost(PAYMENT_CAPTURED_RETRY_PAYLOAD);
+    expect(firstCapture.statusCode).toBe(201);
+
+    const opportunity = [...opportunityStore.rows.values()][0]!;
+    expect(opportunity.status).toBe('RECOVERED');
+    const firstRecoveryEventId = opportunity.recoveryEventId;
+
+    // Send duplicate captured webhook
+    const secondCapture = await signedPost(PAYMENT_CAPTURED_RETRY_PAYLOAD);
+    expect(secondCapture.statusCode).toBe(200);
+    expect(secondCapture.json<WebhookAckResponse>().duplicate).toBe(true);
+
+    // Opportunity should still have the same recovery event
+    const updatedOpportunity = [...opportunityStore.rows.values()][0]!;
+    expect(updatedOpportunity.status).toBe('RECOVERED');
+    expect(updatedOpportunity.recoveryEventId).toBe(firstRecoveryEventId);
+  });
 });

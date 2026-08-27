@@ -268,6 +268,9 @@ export default async function RecoveryCaseDetailPage({
               opportunityId={id}
               decisionAction={decision.recommendedAction}
               list={executions}
+              amount={opportunity.amountAtRisk}
+              currency={opportunity.currency}
+              failureReason={opportunity.reason}
             />
           </>
         )}
@@ -290,10 +293,16 @@ function ExecutionSection({
   opportunityId,
   decisionAction,
   list,
+  amount,
+  currency,
+  failureReason,
 }: {
   opportunityId: string;
   decisionAction: string;
   list: Awaited<ReturnType<typeof getExecutions>>;
+  amount: number;
+  currency: string;
+  failureReason?: string;
 }) {
   return (
     <SectionCard
@@ -364,7 +373,12 @@ function ExecutionSection({
 
           {list.eligibility.eligible ? (
             <div className="mt-6">
-              <ExecuteRecoveryButton opportunityId={opportunityId} />
+              <ExecuteRecoveryButton
+                opportunityId={opportunityId}
+                amount={amount}
+                currency={currency}
+                failureReason={failureReason}
+              />
             </div>
           ) : (
             <p className="mt-6 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-500">

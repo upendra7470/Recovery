@@ -85,6 +85,72 @@ describe('POST /opportunities/:id/execute', () => {
     }
   });
 
+  it('includes Checkout-safe data when provider accepts and creates an order', async () => {
+    const { app, opportunityStore } = await makeApp();
+    try {
+      const opportunity = await seedOpenOpportunity(opportunityStore);
+      const res = await app.inject({
+        method: 'POST',
+        url: `/opportunities/${opportunity.id}/execute`,
+      });
+
+      expect(res.statusCode).toBe(201);
+      const body = res.json<{
+        outcome: string;
+        checkout?: { orderId: string; keyId: string };
+      }>();
+      expect(body.outcome).toBe('created');
+      expect(body.checkout).toBeDefined();
+      expect(body.checkout?.orderId).toMatch(/^ref_/);
+      expect(body.checkout?.keyId).toBeDefined();
+      // Ensure the key secret is never exposed
+      expect(JSON.stringify(body)).not.toContain('key_secret');
+      expect(JSON.stringify(body)).not.toContain('secret');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('does not include Checkout data when provider is unavailable', async () => {
+    const provider = new FakeRecoveryExecutionProvider({ kind: 'unavailable' });
+    const { app, opportunityStore } = await makeApp({ provider });
+    try {
+      const opportunity = await seedOpenOpportunity(opportunityStore);
+      const res = await app.inject({
+        method: 'POST',
+        url: `/opportunities/${opportunity.id}/execute`,
+      });
+
+      expect(res.statusCode).toBe(503);
+      const body = res.json<{ error: { code: string }; checkout?: unknown }>();
+      expect(body.error.code).toBe('EXECUTION_UNAVAILABLE');
+      expect(body.checkout).toBeUndefined();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('does not include Checkout data when execution is blocked', async () => {
+    const { app, opportunityStore } = await makeApp();
+    try {
+      const opportunity = await seedOpenOpportunity(opportunityStore, {
+        failureCode: 'stolen_card',
+        providerPaymentId: 'pay_stolen',
+      });
+      const res = await app.inject({
+        method: 'POST',
+        url: `/opportunities/${opportunity.id}/execute`,
+      });
+
+      expect(res.statusCode).toBe(409);
+      const body = res.json<{ error: { code: string }; checkout?: unknown }>();
+      expect(body.error.code).toBe('EXECUTION_BLOCKED');
+      expect(body.checkout).toBeUndefined();
+    } finally {
+      await app.close();
+    }
+  });
+
   it('replays on duplicate requests with a single provider call', async () => {
     const { app, provider, opportunityStore } = await makeApp();
     try {

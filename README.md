@@ -7,13 +7,15 @@ understand where revenue is leaking, decide how to recover it safely, execute
 approved recovery actions, verify outcomes, and measure the revenue actually
 recovered.
 
-> **Status: Phase 7 — Recovery operations & automation (scheduled execution, bounded retries, reconciliation).**
+> **Status: Phase 10 — Demo-ready customer recovery flow (Razorpay Checkout integration).**
 > RecoveryOS ingests Razorpay payment events, detects revenue leakage, scores
 > every opportunity deterministically, and adds optional advisory AI. Phase 6
 > introduced safety-gated controlled execution; Phase 7 makes it operational:
 > a deterministic scheduler plans and runs bounded automated retries through
 > the same pipeline and reconciles them against webhook-confirmed outcomes.
-> Automation is disabled by default; AI remains advisory-only.
+> Phase 9 added real Razorpay Order API integration; Phase 10 completes the
+> demo-ready flow with frontend Checkout integration, allowing operators to
+> trigger recovery and customers to complete payment via Razorpay Checkout.
 
 ---
 
@@ -29,7 +31,7 @@ manual follow-ups or blunt retry loops. RecoveryOS is being built to provide:
 - **Execution** – orchestrated recovery actions (retries, payment links, voice).
 - **Verification & measurement** – verified outcomes and true recovered-revenue reporting.
 
-## 2. Current phase scope (Phase 1–7)
+## 2. Current phase scope (Phase 1–10)
 
 Phase 1 delivered the application foundation:
 
@@ -109,10 +111,28 @@ Phase 6 adds controlled recovery execution & outcome tracking:
 | API | `POST /opportunities/:id/execute`, `GET /opportunities/:id/executions` |
 | Frontend | Recovery Execution section on case detail with eligibility, attempt history and truthful "awaiting payment outcome" messaging |
 
+Phase 9 adds real Razorpay Order API integration:
+
+| Area | Delivered |
+| --- | --- |
+| Real API integration | `RazorpayRetryAdapter` calls `POST /v1/orders` with Basic Auth (`key_id:key_secret`) to create real Razorpay orders |
+| Idempotency | Receipt-based idempotency using execution ID — Razorpay rejects duplicate receipts |
+| Error handling | Structured error mapping: auth failures (401), duplicate execution, rate limiting (429), network errors, timeouts |
+| Security | Key secret never logged, persisted, or exposed to frontend; only used in Basic Auth header |
+
+Phase 10 adds demo-ready customer recovery flow:
+
+| Area | Delivered |
+| --- | --- |
+| Checkout integration | Frontend opens Razorpay Checkout with order ID for customer payment |
+| Checkout data | Backend returns safe Checkout data (orderId, keyId) without exposing secrets |
+| Payment flow | Complete customer payment flow: execute → open Checkout → customer pays → webhook confirms recovery |
+| UI states | Loading, success, failure, and dismissed states for Checkout flow |
+
 Explicitly **not** implemented yet: autonomous payments/retries/refunds/messaging,
 model training/fine-tuning, vector databases, RAG, agents, orchestration
 frameworks, policies engine, outcome-verification workflows, ledger, merchant
-memory, voice recovery, authentication.
+memory, voice recovery.
 
 ## 3. Architecture
 
@@ -268,6 +288,11 @@ opportunity/merchant/decision/status/createdAt. Phase 7 extends
 `20260826120833_add_execution_scheduling_fields`): `origin`
 (MANUAL/AUTOMATED), `nextAttemptAt`, `scheduledAt`, and a composite
 `(status, next_attempt_at)` index powering due-work discovery.
+
+Phase 9-10 extend the execution flow with real Razorpay Order API integration
+and frontend Checkout flow. The database schema remains unchanged — the
+provider reference ID (order ID) is returned in the API response for
+Checkout but not persisted in the execution record.
 
 ## 8. Running the application
 
@@ -561,6 +586,13 @@ touches a real AI provider. Phase 6 adds execution tests:
   blocked-audit behavior, tenant attribution), retry-policy unit tests,
   operations route tests (overview/list filters/detail/scoping/validation),
   env bounds for new variables, and a web test pinning reconciliation labels.
+Phase 9 adds Razorpay adapter tests: Basic Auth verification, order creation
+normalization, receipt-based idempotency, duplicate execution detection, error
+code mapping (401, 400, 429, 500), timeout/network handling, malformed response
+handling, and security (secret never in request body). Phase 10 adds Checkout
+integration tests: Checkout-safe response shape, secret never exposed, provider
+unavailable/blocked states don't include Checkout data, duplicate captured
+webhook handling.
 
 ## 10. Lint
 
@@ -595,18 +627,19 @@ is advisory text generation only; it cannot execute anything and cannot
 override deterministic safety decisions. No model training/fine-tuning, no
 vector databases, no RAG pipelines, no agent frameworks, no anomaly detection,
 no synthetic transactions or simulation, no policies engine, no analytics
-beyond the read APIs, no authentication. `RECOVERED` status reflects only a
-customer-initiated successful retry observed in the event stream.
+beyond the read APIs. `RECOVERED` status reflects only a customer-initiated
+successful retry observed in the event stream.
 
 ## 14. Planned future phases
 
 ~~Phase 2 Razorpay integration + webhook ingestion~~ (delivered) · ~~Phase 3
 revenue leakage detection~~ (delivered) · ~~Phase 4 deterministic decision
 engine~~ (delivered) · ~~Phase 5 AI-assisted intelligence~~ (delivered,
-advisory-only) · Phase 6 policy/safety engine (formal rules over decisions +
-advice before any orchestration exists) · Phase 7 recovery action orchestrator
-(human-approved execution; consumes recommendations + advice) · Phase 8 outcome
-verification · Phase 9 recovery ledger · Phase 10 synthetic data + simulation ·
-Phase 11 adaptive merchant memory · Phase 12 recovery modules · Phase 13
-Hinglish voice recovery · Phase 14 full merchant dashboard. Details:
+advisory-only) · ~~Phase 6 controlled execution~~ (delivered) · ~~Phase 7
+recovery operations & automation~~ (delivered) · ~~Phase 8 authentication~~
+(delivered) · ~~Phase 9 real Razorpay integration~~ (delivered) · ~~Phase 10
+demo-ready customer recovery flow~~ (delivered) · Phase 11 outcome verification
+workflows · Phase 12 recovery ledger · Phase 13 synthetic data + simulation ·
+Phase 14 adaptive merchant memory · Phase 15 recovery modules · Phase 16
+Hinglish voice recovery · Phase 17 full merchant dashboard. Details:
 [docs/architecture.md](docs/architecture.md).

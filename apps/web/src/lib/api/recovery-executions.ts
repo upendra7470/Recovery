@@ -33,10 +33,16 @@ export interface ExecutionsListResponse {
   executions: ExecutionSummary[];
 }
 
+export interface CheckoutData {
+  orderId: string;
+  keyId: string;
+}
+
 export interface ExecutionResultResponse {
   opportunityId: string;
   outcome: 'created' | 'replayed' | 'provider-rejected' | 'provider-unavailable' | 'blocked';
   execution: ExecutionSummary;
+  checkout?: CheckoutData;
 }
 
 export interface ExecutionErrorBody {
