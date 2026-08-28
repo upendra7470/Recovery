@@ -1,4 +1,5 @@
 import Fastify, { type FastifyInstance } from 'fastify';
+import cors from '@fastify/cors';
 import { randomUUID } from 'node:crypto';
 import { loadEnv, type AppEnv } from './config/env.js';
 import { startRecoveryAutomation } from './runtime/recovery-automation.js';
@@ -195,6 +196,22 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   registerSecurityHeaders(app);
   registerErrorHandler(app);
+
+  // CORS for browser client components (e.g., demo mode controls)
+  // In development, reflect the request origin. In production, restrict to configured origins.
+  const allowedOrigins = [
+    env.NEXT_PUBLIC_APP_URL,
+    env.AUTH_ALLOWED_WEB_ORIGIN,
+  ].filter((url): url is string => url !== undefined);
+
+  await app.register(cors, {
+    origin: env.NODE_ENV === 'development' ? true : (allowedOrigins.length > 0 ? allowedOrigins : false),
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Accept', 'x-request-id'],
+    credentials: true,
+    maxAge: 86400,
+  });
+
   await app.register(authRoutes);
   await app.register(healthRoutes);
   await app.register(readyRoutes);

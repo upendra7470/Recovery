@@ -88,6 +88,9 @@ export class DemoService {
     const demoRunId = `${DEMO_RUN_PREFIX}_${randomUUID().slice(0, 8)}`;
     const scenarios: DemoScenarioResult[] = [];
 
+    // Ensure demo merchant and payment account exist (FK requirement)
+    await this.ensureDemoInfrastructure();
+
     // Scenario 1: Successful Recovery
     const successful = await this.runSuccessfulRecoveryScenario(demoRunId);
     scenarios.push(successful);
@@ -119,12 +122,11 @@ export class DemoService {
 
     let deleted = 0;
 
-    // Delete demo data in reverse dependency order
-    // We need to find demo data by merchant ID
+    // Cancel all demo executions
+    // Find demo opportunities via the merchant ID
     const demoOpportunities = await this.db.recoveryOpportunity.list({ merchantId: DEMO_MERCHANT_ID });
 
     for (const opp of demoOpportunities) {
-      // Delete executions for this opportunity
       const execs = await this.db.recoveryExecution.listByOpportunity(opp.id);
       for (const exec of execs) {
         await this.db.recoveryExecution.updateStatus({
@@ -138,11 +140,32 @@ export class DemoService {
       }
     }
 
-    // Delete payment events for demo merchant
-    // Note: We can't directly delete, but we can mark them
-    // For a proper reset, we'd need to add delete methods to stores
+    // Clean up demo data using raw SQL to remove all synthetic records
+    await this.db.$queryRaw`DELETE FROM recovery_executions WHERE "merchantId" = ${DEMO_MERCHANT_ID}::uuid`;
+    await this.db.$queryRaw`DELETE FROM recovery_ai_advice WHERE "merchantId" = ${DEMO_MERCHANT_ID}::uuid`;
+    await this.db.$queryRaw`DELETE FROM recovery_decisions WHERE "merchantId" = ${DEMO_MERCHANT_ID}::uuid`;
+    await this.db.$queryRaw`DELETE FROM recovery_opportunities WHERE "merchantId" = ${DEMO_MERCHANT_ID}::uuid`;
+    await this.db.$queryRaw`DELETE FROM payment_events WHERE "merchantId" = ${DEMO_MERCHANT_ID}::uuid`;
+    await this.db.$queryRaw`DELETE FROM payment_accounts WHERE id = ${DEMO_PAYMENT_ACCOUNT_ID}::uuid`;
+    await this.db.$queryRaw`DELETE FROM merchants WHERE id = ${DEMO_MERCHANT_ID}::uuid`;
 
     return { deleted };
+  }
+
+  private async ensureDemoInfrastructure(): Promise<void> {
+    // Upsert demo merchant
+    await this.db.$queryRaw`
+      INSERT INTO merchants (id, name, "createdAt", "updatedAt")
+      VALUES (${DEMO_MERCHANT_ID}::uuid, 'Demo Merchant (Synthetic)', NOW(), NOW())
+      ON CONFLICT (id) DO NOTHING
+    `;
+
+    // Upsert demo payment account
+    await this.db.$queryRaw`
+      INSERT INTO payment_accounts (id, "merchantId", provider, environment, status, "displayName", "createdAt", "updatedAt")
+      VALUES (${DEMO_PAYMENT_ACCOUNT_ID}::uuid, ${DEMO_MERCHANT_ID}::uuid, 'razorpay', 'test', 'active', 'Demo Razorpay Account (Synthetic)', NOW(), NOW())
+      ON CONFLICT (id) DO NOTHING
+    `;
   }
 
   private async runSuccessfulRecoveryScenario(demoRunId: string): Promise<DemoScenarioResult> {
@@ -182,7 +205,7 @@ export class DemoService {
       opportunityId,
       decisionAction,
       executionOutcome: executionResult.outcome,
-      description: `₹2,499 failed payment → OPEN opportunity → ${decisionAction} decision → execution ${executionResult.outcome}`,
+      description: `\u20b92,499 failed payment \u2192 OPEN opportunity \u2192 ${decisionAction} decision \u2192 execution ${executionResult.outcome}`,
     };
   }
 
@@ -197,7 +220,7 @@ export class DemoService {
       providerOrderId: orderId,
       amount: 150000, // ₹1,500 in paise
       currency: 'INR',
-      errorCode: 'CARD_EXPIRED',
+      errorCode: 'expired_card',
       errorDescription: 'The card has expired. Please use a different card.',
       errorSource: 'card',
       errorStep: 'payment_authentication',
@@ -220,7 +243,7 @@ export class DemoService {
       opportunityId,
       decisionAction,
       executionOutcome: executionResult.outcome,
-      description: `₹1,500 expired card → OPEN opportunity → ${decisionAction} decision → execution ${executionResult.outcome} (safety gate blocks)`,
+      description: `\u20b91,500 expired card \u2192 OPEN opportunity \u2192 ${decisionAction} decision \u2192 execution ${executionResult.outcome} (safety gate blocks)`,
     };
   }
 
@@ -258,7 +281,7 @@ export class DemoService {
       opportunityId,
       decisionAction,
       executionOutcome: 'not-triggered',
-      description: `₹999 ambiguous failure → OPEN opportunity → ${decisionAction} decision → AI explains situation`,
+      description: `\u20b9999 ambiguous failure \u2192 OPEN opportunity \u2192 ${decisionAction} decision \u2192 AI explains situation`,
     };
   }
 
@@ -350,11 +373,11 @@ export class DemoService {
     executions: number;
   }> {
     const [merchants, paymentEvents, opportunities, decisions, executions] = await Promise.all([
-      this.db.$queryRaw`SELECT COUNT(*) as count FROM merchants WHERE id = ${DEMO_MERCHANT_ID}`,
-      this.db.$queryRaw`SELECT COUNT(*) as count FROM payment_events WHERE merchant_id = ${DEMO_MERCHANT_ID}`,
-      this.db.$queryRaw`SELECT COUNT(*) as count FROM recovery_opportunities WHERE merchant_id = ${DEMO_MERCHANT_ID}`,
-      this.db.$queryRaw`SELECT COUNT(*) as count FROM recovery_decisions WHERE merchant_id = ${DEMO_MERCHANT_ID}`,
-      this.db.$queryRaw`SELECT COUNT(*) as count FROM recovery_executions WHERE merchant_id = ${DEMO_MERCHANT_ID}`,
+      this.db.$queryRaw`SELECT COUNT(*) as count FROM merchants WHERE id = ${DEMO_MERCHANT_ID}::uuid`,
+      this.db.$queryRaw`SELECT COUNT(*) as count FROM payment_events WHERE "merchantId" = ${DEMO_MERCHANT_ID}::uuid`,
+      this.db.$queryRaw`SELECT COUNT(*) as count FROM recovery_opportunities WHERE "merchantId" = ${DEMO_MERCHANT_ID}::uuid`,
+      this.db.$queryRaw`SELECT COUNT(*) as count FROM recovery_decisions WHERE "merchantId" = ${DEMO_MERCHANT_ID}::uuid`,
+      this.db.$queryRaw`SELECT COUNT(*) as count FROM recovery_executions WHERE "merchantId" = ${DEMO_MERCHANT_ID}::uuid`,
     ]);
 
     const getCount = (result: unknown): number => {

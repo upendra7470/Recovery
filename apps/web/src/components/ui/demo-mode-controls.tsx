@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   getDemoStatus,
   runDemo,
@@ -12,6 +13,7 @@ import {
 import { SectionCard } from './section-card';
 
 export function DemoModeControls() {
+  const router = useRouter();
   const [status, setStatus] = useState<DemoStatusResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -30,6 +32,11 @@ export function DemoModeControls() {
     loadStatus();
   }, []);
 
+  const refreshAll = useCallback(() => {
+    // Refresh the current page's server-rendered data
+    router.refresh();
+  }, [router]);
+
   const handleRunDemo = async () => {
     setLoading(true);
     setError(null);
@@ -40,6 +47,8 @@ export function DemoModeControls() {
       // Refresh status
       const newStatus = await getDemoStatus();
       setStatus(newStatus);
+      // Refresh all server-rendered pages (Overview, Recovery Cases, etc.)
+      refreshAll();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to run demo');
     } finally {
@@ -57,6 +66,8 @@ export function DemoModeControls() {
       // Refresh status
       const newStatus = await getDemoStatus();
       setStatus(newStatus);
+      // Refresh all server-rendered pages
+      refreshAll();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to reset demo');
     } finally {

@@ -100,6 +100,10 @@ export const envSchema = z.object({
   // data or production payments.
   // ---------------------------------------------------------------------------
   DEMO_MODE_ENABLED: booleanFlag(false),
+  // ---------------------------------------------------------------------------
+  // Cross-origin resource sharing (CORS) origin for browser client components.
+  // ---------------------------------------------------------------------------
+  NEXT_PUBLIC_APP_URL: emptyToUndefined(z.url().optional()),
 }).superRefine((env, ctx) => {
   if (env.AUTH_ENABLED && env.AUTH_SESSION_SECRET === undefined) {
     ctx.addIssue({
