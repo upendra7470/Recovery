@@ -42,9 +42,9 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
       </nav>
       <div className="shrink-0 border-t border-slate-800 px-5 py-4">
         <p className="text-[11px] leading-relaxed text-slate-500">
-          Phase 1 · Foundation build
+          <span className="font-semibold text-emerald-400">● Demo Mode Ready</span>
           <br />
-          Payments and AI not connected yet
+          Phase 11.2 · Command Center
         </p>
       </div>
     </div>

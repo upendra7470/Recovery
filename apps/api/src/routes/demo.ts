@@ -1,36 +1,21 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { DemoService } from '../services/demo.service.js';
+import { z } from 'zod';
+import {
+  DemoService,
+  type DemoRunResult,
+  type DemoScenarioResult,
+  type DemoStageTrace,
+  type DemoMetrics,
+  type DemoStatusResult,
+} from '../services/demo.service.js';
 
-export interface DemoStatusResponse {
-  enabled: boolean;
-  hasDemoData: boolean;
-  counts: {
-    merchants: number;
-    paymentEvents: number;
-    opportunities: number;
-    decisions: number;
-    executions: number;
-  };
-}
-
-export interface DemoScenarioResponse {
-  scenario: string;
-  opportunityId: string;
-  decisionAction: string;
-  executionOutcome: string;
-  description: string;
-}
-
-export interface DemoRunResponse {
-  demoRunId: string;
-  scenarios: DemoScenarioResponse[];
-  summary: {
-    totalScenarios: number;
-    successfulRecovery: number;
-    unsafeRecovery: number;
-    reviewCase: number;
-  };
-}
+export type {
+  DemoRunResult as DemoRunResponse,
+  DemoScenarioResult as DemoScenarioResponse,
+  DemoStageTrace,
+  DemoMetrics,
+  DemoStatusResult as DemoStatusResponse,
+};
 
 export interface DemoResetResponse {
   deleted: number;
@@ -43,8 +28,18 @@ export interface DemoErrorResponse {
   };
 }
 
+const runScenarioParamSchema = z.object({
+  scenario: z.enum(['successful', 'unsafe', 'review', 'all']),
+});
+
+const runScenarioBodySchema = z
+  .object({
+    scenario: z.enum(['successful', 'unsafe', 'review', 'all']).optional(),
+  })
+  .optional();
+
 /**
- * Demo Mode routes (Phase 11).
+ * Demo Mode routes (Phase 11.2 — Live RecoveryOS Demo Command Center).
  *
  * Provides deterministic synthetic scenarios for demonstration purposes.
  * All data is clearly marked as synthetic/demo data. No real customer PII,
@@ -64,9 +59,9 @@ export const demoRoutes: FastifyPluginAsync = async (app) => {
     );
   };
 
-  app.get<{ Reply: DemoStatusResponse | DemoErrorResponse }>(
+  app.get<{ Reply: DemoStatusResult | DemoErrorResponse }>(
     '/demo/status',
-    async (request, reply) => {
+    async (_request, reply) => {
       const service = createDemoService();
       const status = await service.getStatus();
 
@@ -83,11 +78,9 @@ export const demoRoutes: FastifyPluginAsync = async (app) => {
     }
   );
 
-  app.post<{ Reply: DemoRunResponse | DemoErrorResponse }>(
+  app.post<{ Body: { scenario?: 'successful' | 'unsafe' | 'review' | 'all' }; Reply: DemoRunResult | DemoErrorResponse }>(
     '/demo/run',
     async (request, reply) => {
-      const service = createDemoService();
-
       if (!app.config.DEMO_MODE_ENABLED) {
         return reply.status(403).send({
           error: {
@@ -97,14 +90,73 @@ export const demoRoutes: FastifyPluginAsync = async (app) => {
         });
       }
 
+      const bodyParsed = runScenarioBodySchema.safeParse(request.body);
+      const scenario = bodyParsed.success ? bodyParsed.data?.scenario : undefined;
+
+      const service = createDemoService();
       try {
-        const result = await service.runDemo();
+        const result = await service.runDemo(scenario);
         return reply.status(201).send(result);
       } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to run demo';
+        if (message.includes('already in progress')) {
+          return reply.status(409).send({
+            error: {
+              code: 'DEMO_RUN_IN_PROGRESS',
+              message,
+            },
+          });
+        }
         return reply.status(500).send({
           error: {
             code: 'DEMO_RUN_FAILED',
-            message: error instanceof Error ? error.message : 'Failed to run demo',
+            message,
+          },
+        });
+      }
+    }
+  );
+
+  app.post<{ Params: { scenario: 'successful' | 'unsafe' | 'review' | 'all' }; Reply: DemoRunResult | DemoErrorResponse }>(
+    '/demo/run/:scenario',
+    async (request, reply) => {
+      if (!app.config.DEMO_MODE_ENABLED) {
+        return reply.status(403).send({
+          error: {
+            code: 'DEMO_MODE_DISABLED',
+            message: 'Demo mode is not enabled. Set DEMO_MODE_ENABLED=true to enable.',
+          },
+        });
+      }
+
+      const paramsParsed = runScenarioParamSchema.safeParse(request.params);
+      if (!paramsParsed.success) {
+        return reply.status(400).send({
+          error: {
+            code: 'INVALID_SCENARIO',
+            message: 'Scenario must be one of: successful, unsafe, review, all',
+          },
+        });
+      }
+
+      const service = createDemoService();
+      try {
+        const result = await service.runDemo(paramsParsed.data.scenario);
+        return reply.status(201).send(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to run demo';
+        if (message.includes('already in progress')) {
+          return reply.status(409).send({
+            error: {
+              code: 'DEMO_RUN_IN_PROGRESS',
+              message,
+            },
+          });
+        }
+        return reply.status(500).send({
+          error: {
+            code: 'DEMO_RUN_FAILED',
+            message,
           },
         });
       }
@@ -113,9 +165,7 @@ export const demoRoutes: FastifyPluginAsync = async (app) => {
 
   app.delete<{ Reply: DemoResetResponse | DemoErrorResponse }>(
     '/demo/reset',
-    async (request, reply) => {
-      const service = createDemoService();
-
+    async (_request, reply) => {
       if (!app.config.DEMO_MODE_ENABLED) {
         return reply.status(403).send({
           error: {
@@ -125,6 +175,7 @@ export const demoRoutes: FastifyPluginAsync = async (app) => {
         });
       }
 
+      const service = createDemoService();
       try {
         const result = await service.reset();
         return reply.send(result);

@@ -1,23 +1,68 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://127.0.0.1:4000';
 
-export interface DemoStatusResponse {
-  enabled: boolean;
-  hasDemoData: boolean;
-  counts: {
-    merchants: number;
-    paymentEvents: number;
-    opportunities: number;
-    decisions: number;
-    executions: number;
-  };
+export type DemoScenarioType = 'SUCCESSFUL_RECOVERY' | 'UNSAFE_RECOVERY' | 'REVIEW_CASE';
+
+export interface DemoStageTrace {
+  id: string;
+  stepNumber: number;
+  key: string;
+  name: string;
+  title: string;
+  subtitle: string;
+  timeOffsetMs: number;
+  status: 'completed' | 'blocked' | 'review' | 'skipped';
+  details: Record<string, unknown>;
+  badge?: string;
+  badgeTone?: 'risk' | 'positive' | 'warn' | 'neutral' | 'indigo';
+}
+
+export interface DemoPolicyCheck {
+  name: string;
+  passed: boolean;
+  detail: string;
 }
 
 export interface DemoScenarioResponse {
-  scenario: string;
+  scenario: DemoScenarioType;
+  scenarioName: string;
   opportunityId: string;
+  paymentId: string;
+  orderId: string;
+  amount: number;
+  currency: string;
   decisionAction: string;
+  decisionScore: number;
+  decisionConfidence: number;
+  decisionPriority: string;
+  decisionExplanation: string[];
+  policyChecks: DemoPolicyCheck[];
+  aiAdvice: {
+    summary: string;
+    explanation: string;
+    nextStep: string;
+    confidence: number;
+    operatorMessage?: string | null;
+    customerMessage?: string | null;
+    warnings: string[];
+  } | null;
   executionOutcome: string;
+  executionStatus: string;
+  providerReferenceId?: string;
+  recovered: boolean;
+  recoveredAmount: number;
   description: string;
+  stages: DemoStageTrace[];
+}
+
+export interface DemoMetrics {
+  revenueAtRisk: number;
+  recoverableRevenue: number;
+  recoveredRevenue: number;
+  recoveryRate: number;
+  openOpportunities: number;
+  successfulRecoveries: number;
+  blockedActions: number;
+  humanReviews: number;
 }
 
 export interface DemoRunResponse {
@@ -28,7 +73,25 @@ export interface DemoRunResponse {
     successfulRecovery: number;
     unsafeRecovery: number;
     reviewCase: number;
+    recoveredAmount: number;
   };
+  metrics: DemoMetrics;
+}
+
+export interface DemoStatusResponse {
+  enabled: boolean;
+  hasDemoData: boolean;
+  isRunning: boolean;
+  counts: {
+    merchants: number;
+    paymentEvents: number;
+    opportunities: number;
+    decisions: number;
+    executions: number;
+    aiAdvice: number;
+  };
+  metrics: DemoMetrics;
+  lastRunScenario: string | null;
 }
 
 export interface DemoResetResponse {
@@ -49,15 +112,15 @@ export class DemoApiError extends Error {
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const url = `${API_BASE}${path}`;
   const headers: Record<string, string> = {};
-  // Only set Content-Type when there's a body to send
   if (options?.body) {
     headers['Content-Type'] = 'application/json';
   }
   const response = await fetch(url, {
+    cache: 'no-store',
     ...options,
     headers: {
       ...headers,
-      ...options?.headers as Record<string, string>,
+      ...(options?.headers as Record<string, string>),
     },
   });
 
@@ -79,8 +142,9 @@ export async function getDemoStatus(): Promise<DemoStatusResponse> {
   return request<DemoStatusResponse>('/demo/status');
 }
 
-export async function runDemo(): Promise<DemoRunResponse> {
-  return request<DemoRunResponse>('/demo/run', { method: 'POST' });
+export async function runDemo(scenario?: 'successful' | 'unsafe' | 'review' | 'all'): Promise<DemoRunResponse> {
+  const path = scenario ? `/demo/run/${scenario}` : '/demo/run';
+  return request<DemoRunResponse>(path, { method: 'POST' });
 }
 
 export async function resetDemo(): Promise<DemoResetResponse> {

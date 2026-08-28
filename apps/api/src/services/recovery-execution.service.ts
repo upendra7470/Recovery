@@ -18,6 +18,9 @@ import type { RecoveryOpportunityRepository } from '../repositories/recovery-opp
 
 export interface RecoveryExecutionServiceConfig extends ExecutionSafetyConfig {
   enabled: boolean;
+  /** When true, execution is allowed even if RECOVERY_EXECUTION_ENABLED is false.
+   *  Used by Demo Mode to demonstrate the full lifecycle without real credentials. */
+  demoMode?: boolean;
 }
 
 export interface ExecutionEligibility {
@@ -150,7 +153,7 @@ export class RecoveryExecutionService {
       return { outcome: 'replayed', execution: existing };
     }
 
-    if (!this.config.enabled) {
+    if (!this.config.enabled && !this.config.demoMode) {
       // Disabled mode: safety evaluation already ran above; nothing executes.
       return { outcome: 'disabled', assessment };
     }

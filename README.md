@@ -7,15 +7,14 @@ understand where revenue is leaking, decide how to recover it safely, execute
 approved recovery actions, verify outcomes, and measure the revenue actually
 recovered.
 
-> **Status: Phase 10 — Demo-ready customer recovery flow (Razorpay Checkout integration).**
+> **Status: Phase 11.2 — Live RecoveryOS Demo Command Center.**
 > RecoveryOS ingests Razorpay payment events, detects revenue leakage, scores
-> every opportunity deterministically, and adds optional advisory AI. Phase 6
-> introduced safety-gated controlled execution; Phase 7 makes it operational:
-> a deterministic scheduler plans and runs bounded automated retries through
-> the same pipeline and reconciles them against webhook-confirmed outcomes.
-> Phase 9 added real Razorpay Order API integration; Phase 10 completes the
-> demo-ready flow with frontend Checkout integration, allowing operators to
-> trigger recovery and customers to complete payment via Razorpay Checkout.
+> every opportunity deterministically, and pairs explainable AI advice with strict
+> deterministic safety policies. Phase 11.2 introduces the interactive
+> **Live Demo Command Center** (`/demo`), allowing judges and operators to trigger
+> live end-to-end recovery scenarios (Successful ₹2,499 recovery, Unsafe ₹1,500 blocked
+> retry, and Ambiguous ₹999 human review) with progressive real-time telemetry,
+> visual pipeline flows, and verified cross-dashboard ledger state.
 
 ---
 
@@ -129,16 +128,18 @@ Phase 10 adds demo-ready customer recovery flow:
 | Payment flow | Complete customer payment flow: execute → open Checkout → customer pays → webhook confirms recovery |
 | UI states | Loading, success, failure, and dismissed states for Checkout flow |
 
-Phase 11 adds demo mode for synthetic demonstration scenarios:
+Phase 11.2 adds the Live RecoveryOS Demo Command Center:
 
 | Area | Delivered |
 | --- | --- |
-| Demo mode flag | `DEMO_MODE_ENABLED` environment variable (default `false`) |
-| Demo service | Three synthetic scenarios: successful recovery, unsafe recovery (blocked), AI-assisted review |
-| Demo routes | `POST /demo/run`, `GET /demo/status`, `DELETE /demo/reset` |
-| Demo data | Synthetic merchant, payment events, opportunities, decisions, and executions |
-| Demo UI | Settings page with demo mode controls, run/reset buttons, and data indicators |
-| Safety | All data clearly marked as synthetic; no real PII, credentials, or production payments |
+| Demo Command Center UI | Dedicated `/demo` route with real-time animated 10-stage pipeline, streaming telemetry log, AI decision card, and live metrics |
+| Live Scenarios | Scenario A: Successful Recovery (₹2,499), Scenario B: Unsafe Recovery (₹1,500 Blocked), Scenario C: Ambiguous Review Case (₹999) |
+| Demo AI Advisor | `DemoAIAdvisor` providing transparent, structured advice and explanations without requiring external API keys |
+| Safe Adapter | `DemoRetryAdapter` returning deterministic reference IDs without external network calls |
+| Metrics Engine | Real aggregate statistics (`revenueAtRisk`, `recoverableRevenue`, `recoveredRevenue`, `recoveryRate`) computed directly from PostgreSQL |
+| Cross-Page Consistency | Running a scenario from `/demo` immediately reflects in `/overview`, `/recovery-cases`, `/operations`, `/ai-decisions`, `/payment-health`, and `/analytics` |
+| Concurrency Protection | Execution lock prevents race conditions during demo runs |
+| Safety Boundary | Strict isolation between AI advisory reasoning and deterministic safety policy validation |
 | Isolation | Demo data isolated by merchant ID; reset only affects demo-owned data |
 | Tests | Comprehensive tests for demo mode enable/disable, scenarios, and reset |
 

@@ -27,6 +27,8 @@ import { RecoveryExecutionService } from './services/recovery-execution.service.
 import { RecoveryOperationScheduler } from './services/recovery-operation-scheduler.service.js';
 import { RecoveryOperationsService } from './services/recovery-operations.service.js';
 import { RazorpayRetryAdapter } from './execution/providers/razorpay-retry.adapter.js';
+import { DemoRetryAdapter } from './execution/providers/demo-retry.adapter.js';
+import { DemoAIAdvisor } from './ai/providers/demo-ai.adapter.js';
 import type { RecoveryExecutionProvider } from './domain/recovery-execution.js';
 import { RecoveryExecutionRepository } from './repositories/recovery-execution.repository.js';
 import { OpenAICompatibleAdvisor } from './ai/providers/openai-compatible.js';
@@ -92,6 +94,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   // AI advisory layer (Phase 5): constructed only when enabled; every failure
   // path degrades to an explicit unavailable state inside the service.
+  // In Demo Mode, a deterministic synthetic AI advisor is used instead.
   const advisor = env.AI_ENABLED
     ? new OpenAICompatibleAdvisor({
         provider: env.AI_PROVIDER ?? 'openai-compatible',
@@ -100,7 +103,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         baseUrl: env.AI_BASE_URL ?? '',
         timeoutMs: env.AI_TIMEOUT_MS,
       })
-    : null;
+    : env.DEMO_MODE_ENABLED
+      ? new DemoAIAdvisor()
+      : null;
   app.decorate(
     'aiAdvisorService',
     new RecoveryAIAdvisorService(
@@ -108,9 +113,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       db.recoveryAIAdvice,
       advisor,
       {
-        enabled: env.AI_ENABLED,
-        provider: env.AI_PROVIDER ?? 'openai-compatible',
-        model: env.AI_MODEL ?? 'unavailable',
+        enabled: env.AI_ENABLED || env.DEMO_MODE_ENABLED,
+        provider: env.AI_PROVIDER ?? (env.DEMO_MODE_ENABLED ? 'demo-intelligence' : 'openai-compatible'),
+        model: env.AI_MODEL ?? (env.DEMO_MODE_ENABLED ? 'demo-model-v1' : 'unavailable'),
         advisorVersion: env.AI_ADVISOR_VERSION,
       },
       app.log
@@ -120,16 +125,19 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   // Controlled recovery execution (Phase 6): disabled by default. The
   // provider is constructed only when Razorpay credentials are configured;
   // otherwise the adapter deterministically reports not_configured.
+  // In Demo Mode, a deterministic demo provider is used instead.
   const executionProvider =
     options.executionProvider ??
-    (env.RECOVERY_EXECUTION_PROVIDER === 'razorpay'
-      ? new RazorpayRetryAdapter({
-          keyId: env.RAZORPAY_KEY_ID,
-          keySecret: env.RAZORPAY_KEY_SECRET,
-          baseUrl: env.RAZORPAY_BASE_URL,
-          timeoutMs: env.RECOVERY_EXECUTION_TIMEOUT_MS,
-        })
-      : null);
+    (env.DEMO_MODE_ENABLED
+      ? new DemoRetryAdapter()
+      : env.RECOVERY_EXECUTION_PROVIDER === 'razorpay'
+        ? new RazorpayRetryAdapter({
+            keyId: env.RAZORPAY_KEY_ID,
+            keySecret: env.RAZORPAY_KEY_SECRET,
+            baseUrl: env.RAZORPAY_BASE_URL,
+            timeoutMs: env.RECOVERY_EXECUTION_TIMEOUT_MS,
+          })
+        : null);
   app.decorate(
     'executionService',
     new RecoveryExecutionService(
@@ -140,6 +148,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       executionProvider,
       {
         enabled: env.RECOVERY_EXECUTION_ENABLED,
+        demoMode: env.DEMO_MODE_ENABLED,
         minConfidence: env.RECOVERY_EXECUTION_MIN_CONFIDENCE,
         maxRetries: env.RECOVERY_EXECUTION_MAX_RETRIES,
       },

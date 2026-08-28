@@ -1,8 +1,13 @@
 import type { ReactElement } from 'react';
 
-export type NavIconName = 'overview' | 'cases' | 'operations' | 'pulse' | 'sparkles' | 'chart' | 'settings';
+export type NavIconName = 'demo' | 'overview' | 'cases' | 'operations' | 'pulse' | 'sparkles' | 'chart' | 'settings';
 
 const ICON_PATHS: Record<NavIconName, ReactElement> = {
+  demo: (
+    <>
+      <polygon points="5 3 19 12 5 21 5 3" />
+    </>
+  ),
   overview: (
     <>
       <rect x="3" y="3" width="7" height="7" rx="1.5" />
