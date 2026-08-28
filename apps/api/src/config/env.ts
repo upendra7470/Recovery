@@ -94,6 +94,12 @@ export const envSchema = z.object({
   AUTH_COOKIE_SECURE: booleanFlag(true),
   /** When set, auth endpoints accept credentialed CORS from this origin only. */
   AUTH_ALLOWED_WEB_ORIGIN: emptyToUndefined(z.url().optional()),
+  // ---------------------------------------------------------------------------
+  // Demo Mode (Phase 11) -- DISABLED by default. Provides deterministic
+  // synthetic scenarios for demonstration purposes. Never uses real customer
+  // data or production payments.
+  // ---------------------------------------------------------------------------
+  DEMO_MODE_ENABLED: booleanFlag(false),
 }).superRefine((env, ctx) => {
   if (env.AUTH_ENABLED && env.AUTH_SESSION_SECRET === undefined) {
     ctx.addIssue({

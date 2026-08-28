@@ -129,6 +129,19 @@ Phase 10 adds demo-ready customer recovery flow:
 | Payment flow | Complete customer payment flow: execute → open Checkout → customer pays → webhook confirms recovery |
 | UI states | Loading, success, failure, and dismissed states for Checkout flow |
 
+Phase 11 adds demo mode for synthetic demonstration scenarios:
+
+| Area | Delivered |
+| --- | --- |
+| Demo mode flag | `DEMO_MODE_ENABLED` environment variable (default `false`) |
+| Demo service | Three synthetic scenarios: successful recovery, unsafe recovery (blocked), AI-assisted review |
+| Demo routes | `POST /demo/run`, `GET /demo/status`, `DELETE /demo/reset` |
+| Demo data | Synthetic merchant, payment events, opportunities, decisions, and executions |
+| Demo UI | Settings page with demo mode controls, run/reset buttons, and data indicators |
+| Safety | All data clearly marked as synthetic; no real PII, credentials, or production payments |
+| Isolation | Demo data isolated by merchant ID; reset only affects demo-owned data |
+| Tests | Comprehensive tests for demo mode enable/disable, scenarios, and reset |
+
 Explicitly **not** implemented yet: autonomous payments/retries/refunds/messaging,
 model training/fine-tuning, vector databases, RAG, agents, orchestration
 frameworks, policies engine, outcome-verification workflows, ledger, merchant
@@ -208,6 +221,7 @@ edit the generated files per environment. Never commit real `.env` files.
 | `AI_MODEL` / `AI_API_KEY` / `AI_BASE_URL` | API | OpenAI-compatible chat-completions endpoint configuration (required when `AI_ENABLED=true`; placeholders only — never commit real keys) |
 | `AI_TIMEOUT_MS` | API | Hard advisor timeout (250–60000, default 5000); timeouts degrade to an AI-unavailable state |
 | `AI_ADVISOR_VERSION` | API | Version stamp persisted with every advice row (default `v1`) |
+| `DEMO_MODE_ENABLED` | API | Enable demo mode with synthetic scenarios (`true`/`false`, default `false`) |
 | `NEXT_PUBLIC_APP_URL` | Web | Public URL of the dashboard |
 | `NEXT_PUBLIC_API_URL` | Web | Base URL of the API, called server-side for health |
 

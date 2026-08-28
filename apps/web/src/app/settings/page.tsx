@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { EmptyState } from '@/components/ui/empty-state';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
+import { DemoModeControls } from '@/components/ui/demo-mode-controls';
 
 export const metadata: Metadata = {
   title: 'Settings',
@@ -21,7 +22,7 @@ export default function SettingsPage() {
             <dt className="text-slate-500">Product</dt>
             <dd className="font-medium text-slate-900">RecoveryOS</dd>
             <dt className="text-slate-500">Stage</dt>
-            <dd className="font-medium text-slate-900">Phase 1 · Foundation</dd>
+            <dd className="font-medium text-slate-900">Phase 11 · Demo Mode</dd>
             <dt className="text-slate-500">Configuration</dt>
             <dd className="text-slate-700">
               Managed via environment variables. See{' '}
@@ -29,6 +30,8 @@ export default function SettingsPage() {
             </dd>
           </dl>
         </SectionCard>
+
+        <DemoModeControls />
 
         <SectionCard title="Connected payment accounts" subtitle="Provider integrations">
           <EmptyState

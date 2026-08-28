@@ -548,7 +548,8 @@ first data-bearing phase.
 | 8 ✅ | Authentication | `plugins/authentication.ts`, session cookies, tenant isolation |
 | 9 ✅ | Real Razorpay integration | `execution/providers/razorpay-retry.adapter.ts` (real API), Basic Auth, order creation |
 | 10 ✅ | Demo-ready customer flow | Frontend Checkout integration, Checkout-safe response data |
-| 11 | Outcome verification | consumes orchestrator results, writes ledger candidates |
+| 11 ✅ | Demo mode | `services/demo.service.ts`, `routes/demo.ts`, Settings UI, synthetic scenarios |
+| 12 | Outcome verification | consumes orchestrator results, writes ledger candidates |
 | 12 | Recovery ledger | append-only table + read APIs |
 | 13 | Synthetic data + simulation | `services/simulation` reusing event normalization |
 | 14 | Adaptive memory | evolves merchant memory schemas/consumers |

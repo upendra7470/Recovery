@@ -6,6 +6,7 @@ import type { RecoveryDecisionService } from '../services/recovery-decision.serv
 import type { RecoveryAIAdvisorService } from '../services/recovery-ai-advisor.service.js';
 import type { RecoveryExecutionService } from '../services/recovery-execution.service.js';
 import type { RecoveryOperationsService } from '../services/recovery-operations.service.js';
+import type { RevenueLeakageService } from '../services/revenue-leakage.service.js';
 import type { FastifyRequest } from 'fastify';
 
 declare module 'fastify' {
@@ -24,6 +25,8 @@ declare module 'fastify' {
     executionService: RecoveryExecutionService;
     /** Observational operations surface (overview, execution feed, detail). */
     operationsService: RecoveryOperationsService;
+    /** Revenue leakage detection service (Phase 3). */
+    leakageService: RevenueLeakageService;
   }
 
   interface FastifyRequest {

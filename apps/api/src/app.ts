@@ -11,6 +11,7 @@ import { opportunityRoutes } from './routes/opportunities.js';
 import { decisionRoutes } from './routes/decisions.js';
 import { executionRoutes } from './routes/executions.js';
 import { operationsRoutes } from './routes/operations.js';
+import { demoRoutes } from './routes/demo.js';
 import { authRoutes } from './routes/auth.js';
 import { authenticationPlugin } from './plugins/authentication.js';
 import { healthRoutes } from './routes/health.js';
@@ -28,6 +29,11 @@ import { RazorpayRetryAdapter } from './execution/providers/razorpay-retry.adapt
 import type { RecoveryExecutionProvider } from './domain/recovery-execution.js';
 import { RecoveryExecutionRepository } from './repositories/recovery-execution.repository.js';
 import { OpenAICompatibleAdvisor } from './ai/providers/openai-compatible.js';
+import {
+  createDefaultDetectionRules,
+  RevenueLeakageDetector,
+} from './detection/revenue-leakage.detector.js';
+import { RevenueLeakageService } from './services/revenue-leakage.service.js';
 
 export interface BuildAppOptions {
   env?: AppEnv;
@@ -173,6 +179,16 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     startRecoveryAutomation(operationScheduler, env.RECOVERY_AUTOMATION_TICK_SECONDS, app.log, app);
   }
 
+  // Phase 11: Demo mode — detection service for synthetic scenarios
+  const detector = new RevenueLeakageDetector(createDefaultDetectionRules());
+  const leakageService = new RevenueLeakageService(
+    detector,
+    app.opportunities,
+    app.db.paymentEvent,
+    { windowMs: env.DETECTION_WINDOW_HOURS * 60 * 60 * 1000 }
+  );
+  app.decorate('leakageService', leakageService);
+
   app.addHook('onRequest', async (request, reply) => {
     void reply.header('x-request-id', request.id);
   });
@@ -187,6 +203,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(decisionRoutes);
   await app.register(executionRoutes);
   await app.register(operationsRoutes);
+  await app.register(demoRoutes);
 
   app.addHook('onClose', async () => {
     await closeDatabase();

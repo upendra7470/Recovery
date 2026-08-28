@@ -1,0 +1,158 @@
+'use client';
+
+import { useState, useEffect } from 'react';
+import {
+  getDemoStatus,
+  runDemo,
+  resetDemo,
+  type DemoStatusResponse,
+  type DemoRunResponse,
+  type DemoResetResponse,
+} from '@/lib/api/demo';
+import { SectionCard } from './section-card';
+
+export function DemoModeControls() {
+  const [status, setStatus] = useState<DemoStatusResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<DemoRunResponse | DemoResetResponse | null>(null);
+
+  useEffect(() => {
+    async function loadStatus() {
+      try {
+        const demoStatus = await getDemoStatus();
+        setStatus(demoStatus);
+      } catch {
+        // Demo mode is disabled or not available
+        setStatus({ enabled: false, hasDemoData: false, counts: { merchants: 0, paymentEvents: 0, opportunities: 0, decisions: 0, executions: 0 } });
+      }
+    }
+    loadStatus();
+  }, []);
+
+  const handleRunDemo = async () => {
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    try {
+      const demoResult = await runDemo();
+      setResult(demoResult);
+      // Refresh status
+      const newStatus = await getDemoStatus();
+      setStatus(newStatus);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to run demo');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResetDemo = async () => {
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    try {
+      const resetResult = await resetDemo();
+      setResult(resetResult);
+      // Refresh status
+      const newStatus = await getDemoStatus();
+      setStatus(newStatus);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to reset demo');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!status?.enabled) {
+    return (
+      <SectionCard title="Demo Mode" subtitle="Synthetic demonstration data">
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-relaxed text-slate-600">
+          Demo mode is not enabled. Set <code className="font-mono text-xs">DEMO_MODE_ENABLED=true</code> in your environment to enable synthetic demonstration scenarios.
+        </div>
+      </SectionCard>
+    );
+  }
+
+  return (
+    <SectionCard title="Demo Mode" subtitle="Synthetic demonstration data">
+      <div className="space-y-4">
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-relaxed text-amber-800">
+          <strong>Demo Mode Active</strong> — All data shown is synthetic and clearly marked. No real customer PII, payment credentials, or production transactions are used.
+        </div>
+
+        {status.hasDemoData && (
+          <div className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-3 lg:grid-cols-5">
+            <div className="rounded border border-slate-200 bg-white p-3">
+              <div className="text-slate-500">Merchants</div>
+              <div className="text-lg font-semibold text-slate-900">{status.counts.merchants}</div>
+            </div>
+            <div className="rounded border border-slate-200 bg-white p-3">
+              <div className="text-slate-500">Payment Events</div>
+              <div className="text-lg font-semibold text-slate-900">{status.counts.paymentEvents}</div>
+            </div>
+            <div className="rounded border border-slate-200 bg-white p-3">
+              <div className="text-slate-500">Opportunities</div>
+              <div className="text-lg font-semibold text-slate-900">{status.counts.opportunities}</div>
+            </div>
+            <div className="rounded border border-slate-200 bg-white p-3">
+              <div className="text-slate-500">Decisions</div>
+              <div className="text-lg font-semibold text-slate-900">{status.counts.decisions}</div>
+            </div>
+            <div className="rounded border border-slate-200 bg-white p-3">
+              <div className="text-slate-500">Executions</div>
+              <div className="text-lg font-semibold text-slate-900">{status.counts.executions}</div>
+            </div>
+          </div>
+        )}
+
+        <div className="flex gap-3">
+          <button
+            onClick={handleRunDemo}
+            disabled={loading}
+            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {loading ? 'Running...' : 'Run Demo Scenarios'}
+          </button>
+          <button
+            onClick={handleResetDemo}
+            disabled={loading || !status.hasDemoData}
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {loading ? 'Resetting...' : 'Reset Demo Data'}
+          </button>
+        </div>
+
+        {error && (
+          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {error}
+          </div>
+        )}
+
+        {result && 'scenarios' in result && (
+          <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
+            <strong>Demo scenarios executed successfully.</strong>
+            <div className="mt-2 space-y-1">
+              {(result as DemoRunResponse).scenarios.map((scenario, i) => (
+                <div key={i} className="text-xs">
+                  <span className="font-medium">{scenario.scenario}:</span> {scenario.description}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {result && 'deleted' in result && (
+          <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
+            Demo data reset. Deleted {(result as DemoResetResponse).deleted} synthetic records.
+          </div>
+        )}
+
+        <p className="text-xs text-slate-500">
+          Demo mode runs three synthetic scenarios: successful recovery, unsafe recovery (blocked), and AI-assisted review.
+          All data is clearly marked as synthetic and isolated from production data.
+        </p>
+      </div>
+    </SectionCard>
+  );
+}
