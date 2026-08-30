@@ -103,6 +103,19 @@ enum UserRole {
   VIEWER
 }
 
+/// Aggregated strategy performance memory per merchant + strategy + failure type.
+/// Updated only after verified recovery outcomes — never before.
+enum MerchantMemoryStrategy {
+  RETRY
+  PAYMENT_LINK
+  ALTERNATE_METHOD
+  REVIEW
+  WAIT
+  CUSTOMER_ACTION_REQUIRED
+  DO_NOT_RETRY
+  NO_ACTION
+}
+
 /** Application user (human/operator identity). Mirrors domain/authentication.ts. */
 model User {
   id           String    @id @default(uuid()) @db.Uuid
@@ -162,6 +175,7 @@ model Merchant {
   aiAdvice        RecoveryAIAdvice[]
   executions      RecoveryExecution[]
   memberships     MerchantMembership[]
+  strategyMemory  MerchantStrategyMemory[]
 
   @@map("merchants")
 }
@@ -379,4 +393,37 @@ model RecoveryExecution {
   @@index([status, nextAttemptAt])
   @@index([createdAt])
   @@map("recovery_executions")
+}
+
+/// Aggregated merchant-specific strategy performance evidence.
+/// One row per (merchant, strategy, failureType) combination.
+/// Updated ONLY after verified recovery outcomes — never before outcome verification.
+/// This table powers merchant-specific AI context and effectiveness scoring.
+model MerchantStrategyMemory {
+  id                  String               @id @default(uuid()) @db.Uuid
+  merchantId          String               @db.Uuid
+  strategy            MerchantMemoryStrategy
+  failureType         String
+  attempts            Int                  @default(0)
+  successes           Int                  @default(0)
+  failures            Int                  @default(0)
+  blocked             Int                  @default(0)
+  humanReviews        Int                  @default(0)
+  totalAmountAttempted Int                 @default(0)
+  totalAmountRecovered Int                 @default(0)
+  successRate         Float                @default(0)
+  recoveryRate        Float                @default(0)
+  sampleCount         Int                  @default(0)
+  confidence          Int                  @default(0)
+  effectivenessScore  Float                @default(0)
+  lastObservedAt      DateTime?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  merchant            Merchant             @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  /// One memory row per (merchant, strategy, failureType).
+  @@unique([merchantId, strategy, failureType])
+  @@index([merchantId])
+  @@index([effectivenessScore(sort: Desc)])
+  @@map("merchant_strategy_memory")
 }

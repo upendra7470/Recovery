@@ -18,6 +18,8 @@ import { authenticationPlugin } from './plugins/authentication.js';
 import { healthRoutes } from './routes/health.js';
 import { readyRoutes } from './routes/ready.js';
 import { webhookRoutes } from './routes/webhooks.js';
+import { merchantMemoryRoutes } from './routes/merchant-memory.js';
+import { recoveryModuleRoutes } from './routes/recovery-modules.js';
 import { RecoveryOpportunityRepository } from './repositories/recovery-opportunity.repository.js';
 import { RecoveryDecisionRepository } from './repositories/recovery-decision.repository.js';
 import { AuthenticationService } from './auth/authentication.service.js';
@@ -26,6 +28,7 @@ import { RecoveryAIAdvisorService } from './services/recovery-ai-advisor.service
 import { RecoveryExecutionService } from './services/recovery-execution.service.js';
 import { RecoveryOperationScheduler } from './services/recovery-operation-scheduler.service.js';
 import { RecoveryOperationsService } from './services/recovery-operations.service.js';
+import { MerchantMemoryService } from './services/merchant-memory.service.js';
 import { RazorpayRetryAdapter } from './execution/providers/razorpay-retry.adapter.js';
 import { DemoRetryAdapter } from './execution/providers/demo-retry.adapter.js';
 import { DemoAIAdvisor } from './ai/providers/demo-ai.adapter.js';
@@ -199,6 +202,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   );
   app.decorate('leakageService', leakageService);
 
+  // Phase 11: Adaptive Merchant Memory
+  const merchantMemoryService = new MerchantMemoryService(db.merchantStrategyMemory);
+  app.decorate('merchantMemoryService', merchantMemoryService);
+
   app.addHook('onRequest', async (request, reply) => {
     void reply.header('x-request-id', request.id);
   });
@@ -230,6 +237,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(executionRoutes);
   await app.register(operationsRoutes);
   await app.register(demoRoutes);
+  await app.register(merchantMemoryRoutes);
+  await app.register(recoveryModuleRoutes);
 
   app.addHook('onClose', async () => {
     await closeDatabase();

@@ -51,6 +51,10 @@ import type {
   UserRow,
 } from '../src/domain/authentication.js';
 import type { AppDatabase } from '../src/lib/database.js';
+import type {
+  MerchantStrategyMemoryRow,
+  MerchantStrategyMemoryStore,
+} from '../src/domain/merchant-memory.js';
 
 export function makeTestEnv(overrides: Partial<Record<keyof AppEnv, string>> = {}): AppEnv {
   return parseEnv({
@@ -111,6 +115,158 @@ export function createAuthenticationStoreMock(
   };
 }
 
+export function createMerchantStrategyMemoryStoreMock(
+  overrides: Partial<MerchantStrategyMemoryStore> = {}
+): MerchantStrategyMemoryStore {
+  const store = new Map<string, MerchantStrategyMemoryRow>();
+
+  return {
+    upsert: vi.fn(async (data: { merchantId: string; strategy: string; failureType: string }) => {
+      const key = `${data.merchantId}-${data.strategy}-${data.failureType}`;
+      const existing = store.get(key);
+      if (existing) return existing;
+      const row: MerchantStrategyMemoryRow = {
+        id: randomUUID(),
+        merchantId: data.merchantId,
+        strategy: data.strategy,
+        failureType: data.failureType,
+        attempts: 0,
+        successes: 0,
+        failures: 0,
+        blocked: 0,
+        humanReviews: 0,
+        totalAmountAttempted: 0,
+        totalAmountRecovered: 0,
+        successRate: 0,
+        recoveryRate: 0,
+        sampleCount: 0,
+        confidence: 0,
+        effectivenessScore: 0,
+        lastObservedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      store.set(key, row);
+      return row;
+    }),
+    updateMetrics: vi.fn(async (id: string, metrics: Partial<MerchantStrategyMemoryRow>) => {
+      for (const [, row] of store) {
+        if (row.id === id) {
+          Object.assign(row, metrics, { updatedAt: new Date() });
+          return row;
+        }
+      }
+      throw new Error(`Row ${id} not found`);
+    }),
+    findById: vi.fn(async (id) => {
+      for (const row of store.values()) {
+        if (row.id === id) return row;
+      }
+      return null;
+    }),
+    findByMerchantAndStrategy: vi.fn(async (merchantId, strategy, failureType) => {
+      const key = `${merchantId}-${strategy}-${failureType}`;
+      return store.get(key) ?? null;
+    }),
+    listByMerchant: vi.fn(async (merchantId) => {
+      return Array.from(store.values())
+        .filter((r) => r.merchantId === merchantId)
+        .sort((a, b) => b.effectivenessScore - a.effectivenessScore);
+    }),
+    getOverview: vi.fn(async (merchantId: string) => {
+      const strategies = Array.from(store.values()).filter((r) => r.merchantId === merchantId);
+      const totalOutcomes = strategies.reduce((sum, s) => sum + s.sampleCount, 0);
+      const totalRecovered = strategies.reduce((sum, s) => sum + s.successes, 0);
+      const totalAmountRecovered = strategies.reduce((sum, s) => sum + s.totalAmountRecovered, 0);
+      const totalAmountAttempted = strategies.reduce((sum, s) => sum + s.totalAmountAttempted, 0);
+
+      // Find best strategy by effectiveness score (min 3 samples)
+      let bestStrategy: string | null = null;
+      let bestStrategySuccessRate = 0;
+      for (const s of strategies) {
+        if (s.sampleCount >= 3 && s.effectivenessScore > bestStrategySuccessRate) {
+          bestStrategy = s.strategy;
+          bestStrategySuccessRate = s.effectivenessScore;
+        }
+      }
+
+      // Group by failure type
+      const failureTypeMap = new Map<string, { attempts: number; successes: number; bestStrategy: string | null; bestRate: number }>();
+      for (const s of strategies) {
+        const existing = failureTypeMap.get(s.failureType);
+        if (existing) {
+          existing.attempts += s.attempts;
+          existing.successes += s.successes;
+          if (s.sampleCount >= 3 && s.effectivenessScore > existing.bestRate) {
+            existing.bestStrategy = s.strategy;
+            existing.bestRate = s.effectivenessScore;
+          }
+        } else {
+          failureTypeMap.set(s.failureType, {
+            attempts: s.attempts,
+            successes: s.successes,
+            bestStrategy: s.sampleCount >= 3 ? s.strategy : null,
+            bestRate: s.sampleCount >= 3 ? s.effectivenessScore : 0,
+          });
+        }
+      }
+
+      const failurePatterns = Array.from(failureTypeMap.entries()).map(([failureType, data]) => ({
+        failureType,
+        attempts: data.attempts,
+        successes: data.successes,
+        recoveryRate: data.attempts > 0 ? data.successes / data.attempts : 0,
+        bestStrategy: data.bestStrategy,
+        bestStrategySuccessRate: data.bestRate,
+      }));
+
+      return {
+        merchantId,
+        totalOutcomes,
+        totalRecovered,
+        totalAmountRecovered,
+        recoveryRate: totalAmountAttempted > 0 ? totalAmountRecovered / totalAmountAttempted : 0,
+        bestStrategy,
+        bestStrategySuccessRate,
+        strategies,
+        failurePatterns,
+        confidence: totalOutcomes >= 20 ? 'SUFFICIENT' as const : totalOutcomes > 0 ? 'LOW' as const : 'NO_DATA' as const,
+        lastObservedAt: null,
+      };
+    }),
+    getEvidenceForAI: vi.fn(async (merchantId: string) => {
+      const strategies = Array.from(store.values()).filter((r) => r.merchantId === merchantId);
+      const totalOutcomes = strategies.reduce((sum, s) => sum + s.sampleCount, 0);
+      return {
+        merchantId,
+        strategyPerformance: strategies.map((s) => ({
+          strategy: s.strategy,
+          failureType: s.failureType,
+          attempts: s.attempts,
+          successes: s.successes,
+          successRate: s.successRate,
+          totalAmountRecovered: s.totalAmountRecovered,
+          confidence: s.confidence,
+        })),
+        overallRecoveryRate: 0,
+        totalOutcomes,
+        confidenceLevel: totalOutcomes >= 20 ? 'SUFFICIENT' as const : totalOutcomes > 0 ? 'LOW' as const : 'NO_DATA' as const,
+      };
+    }),
+    deleteByMerchant: vi.fn(async (merchantId) => {
+      let count = 0;
+      for (const [key, row] of store) {
+        if (row.merchantId === merchantId) {
+          store.delete(key);
+          count++;
+        }
+      }
+      return count;
+    }),
+    ...overrides,
+  };
+}
+
 export function createDbExecutorMock(
   impl?: QueryRawMock,
   overrides: Partial<DbExecutorMock> = {}
@@ -128,6 +284,8 @@ export function createDbExecutorMock(
     recoveryExecution:
       overrides.recoveryExecution ?? createRecoveryExecutionStoreMock(),
     auth: overrides.auth ?? createAuthenticationStoreMock(),
+    merchantStrategyMemory:
+      overrides.merchantStrategyMemory ?? createMerchantStrategyMemoryStoreMock(),
   };
 }
 
@@ -152,6 +310,7 @@ export function createRecoveryExecutionStoreMock(
     findDuePending: vi.fn(async (): Promise<RecoveryExecutionRow[]> => []),
     findStalePending: vi.fn(async (): Promise<RecoveryExecutionRow[]> => []),
     listRecent: vi.fn(async (): Promise<RecoveryExecutionRow[]> => []),
+    listAll: vi.fn(async (): Promise<RecoveryExecutionRow[]> => []),
     countByStatus: vi.fn(async () => []),
     countRetryAttempts: vi.fn(async () => 0),
     ...overrides,
@@ -164,6 +323,7 @@ export function createRecoveryAIAdviceStoreMock(
   return {
     upsert: vi.fn(async (data: NewRecoveryAIAdviceData) => sampleAdviceRow(data)),
     findByDecision: vi.fn(async (): Promise<RecoveryAIAdviceRow | null> => null),
+    findByDecisionId: vi.fn(async (): Promise<RecoveryAIAdviceRow | null> => null),
     ...overrides,
   };
 }
@@ -178,6 +338,7 @@ export function createRecoveryDecisionStoreMock(
       async (): Promise<RecoveryDecisionRow | null> => null
     ),
     findLatestByOpportunityIds: vi.fn(async (): Promise<RecoveryDecisionRow[]> => []),
+    listAll: vi.fn(async (): Promise<RecoveryDecisionRow[]> => []),
     countByPriority: vi.fn(async () => 0),
     countByRecommendedAction: vi.fn(async () => 0),
     averageConfidence: vi.fn(async () => null),
@@ -288,6 +449,17 @@ export class InMemoryRecoveryDecisionStore implements RecoveryDecisionStore {
       count += 1;
     }
     return count === 0 ? null : Math.round((total / count) * 100) / 100;
+  }
+
+  async listAll(args: { merchantId?: string }): Promise<RecoveryDecisionRow[]> {
+    const matches: RecoveryDecisionRow[] = [];
+    for (const row of this.rows.values()) {
+      if (args.merchantId !== undefined && row.merchantId !== args.merchantId) {
+        continue;
+      }
+      matches.push(row);
+    }
+    return matches.sort((a, b) => b.evaluatedAt.getTime() - a.evaluatedAt.getTime());
   }
 }
 

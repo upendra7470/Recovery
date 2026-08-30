@@ -7,7 +7,11 @@ import {
   type DemoStageTrace,
   type DemoMetrics,
   type DemoStatusResult,
+  type ModuleScenarioType,
+  type ModuleScenarioResult,
 } from '../services/demo.service.js';
+import { RecoveryModuleExecutionService } from '../services/recovery-module-execution.service.js';
+import { RecoveryExecutionRepository } from '../repositories/recovery-execution.repository.js';
 
 export type {
   DemoRunResult as DemoRunResponse,
@@ -15,6 +19,7 @@ export type {
   DemoStageTrace,
   DemoMetrics,
   DemoStatusResult as DemoStatusResponse,
+  ModuleScenarioResult as ModuleScenarioResponse,
 };
 
 export interface DemoResetResponse {
@@ -38,8 +43,20 @@ const runScenarioBodySchema = z
   })
   .optional();
 
+const MODULE_SCENARIOS = [
+  'subscription_success', 'subscription_unsafe',
+  'mandate_success', 'mandate_unsafe',
+  'b2b_success', 'b2b_promise_broken',
+  'checkout_recovery', 'checkout_recent',
+  'degradation_incident',
+] as const;
+
+const moduleScenarioParamSchema = z.object({
+  moduleScenario: z.enum(MODULE_SCENARIOS as unknown as [string, ...string[]]),
+});
+
 /**
- * Demo Mode routes (Phase 11.2 — Live RecoveryOS Demo Command Center).
+ * Demo Mode routes (Phase 11.2 + Phase 12).
  *
  * Provides deterministic synthetic scenarios for demonstration purposes.
  * All data is clearly marked as synthetic/demo data. No real customer PII,
@@ -49,13 +66,29 @@ const runScenarioBodySchema = z
  */
 export const demoRoutes: FastifyPluginAsync = async (app) => {
   const createDemoService = (): DemoService => {
+    const executionRepository = new RecoveryExecutionRepository(app.db.recoveryExecution);
+    const moduleExecutionService = new RecoveryModuleExecutionService(
+      app.opportunities,
+      app.decisionService,
+      executionRepository,
+      app.db.paymentEvent,
+      app.leakageService,
+      app.merchantMemoryService,
+      {
+        minConfidence: app.config.RECOVERY_EXECUTION_MIN_CONFIDENCE,
+        maxRetries: app.config.RECOVERY_EXECUTION_MAX_RETRIES,
+      }
+    );
+
     return new DemoService(
       app.db,
       app.leakageService,
       app.decisionService,
       app.aiAdvisorService,
       app.executionService,
-      app.config.DEMO_MODE_ENABLED
+      app.merchantMemoryService,
+      app.config.DEMO_MODE_ENABLED,
+      moduleExecutionService
     );
   };
 
@@ -156,6 +189,44 @@ export const demoRoutes: FastifyPluginAsync = async (app) => {
         return reply.status(500).send({
           error: {
             code: 'DEMO_RUN_FAILED',
+            message,
+          },
+        });
+      }
+    }
+  );
+
+  app.post<{ Params: { moduleScenario: string }; Reply: ModuleScenarioResult | DemoErrorResponse }>(
+    '/demo/run/module/:moduleScenario',
+    async (request, reply) => {
+      if (!app.config.DEMO_MODE_ENABLED) {
+        return reply.status(403).send({
+          error: {
+            code: 'DEMO_MODE_DISABLED',
+            message: 'Demo mode is not enabled. Set DEMO_MODE_ENABLED=true to enable.',
+          },
+        });
+      }
+
+      const paramsParsed = moduleScenarioParamSchema.safeParse(request.params);
+      if (!paramsParsed.success) {
+        return reply.status(400).send({
+          error: {
+            code: 'INVALID_MODULE_SCENARIO',
+            message: `Module scenario must be one of: ${MODULE_SCENARIOS.join(', ')}`,
+          },
+        });
+      }
+
+      const service = createDemoService();
+      try {
+        const result = await service.runModuleScenario(paramsParsed.data.moduleScenario as ModuleScenarioType);
+        return reply.status(201).send(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to run module scenario';
+        return reply.status(500).send({
+          error: {
+            code: 'MODULE_SCENARIO_FAILED',
             message,
           },
         });

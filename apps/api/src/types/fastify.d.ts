@@ -7,6 +7,7 @@ import type { RecoveryAIAdvisorService } from '../services/recovery-ai-advisor.s
 import type { RecoveryExecutionService } from '../services/recovery-execution.service.js';
 import type { RecoveryOperationsService } from '../services/recovery-operations.service.js';
 import type { RevenueLeakageService } from '../services/revenue-leakage.service.js';
+import type { MerchantMemoryService } from '../services/merchant-memory.service.js';
 import type { FastifyRequest } from 'fastify';
 
 declare module 'fastify' {
@@ -27,6 +28,8 @@ declare module 'fastify' {
     operationsService: RecoveryOperationsService;
     /** Revenue leakage detection service (Phase 3). */
     leakageService: RevenueLeakageService;
+    /** Adaptive merchant memory service (Phase 11). */
+    merchantMemoryService: MerchantMemoryService;
   }
 
   interface FastifyRequest {

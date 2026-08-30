@@ -326,6 +326,7 @@ export interface RecoveryExecutionStore {
   findDuePending(args: { dueBefore: Date; limit: number }): Promise<RecoveryExecutionRow[]>;
   findStalePending(args: { createdBefore: Date; limit: number }): Promise<RecoveryExecutionRow[]>;
   listRecent(filters: { status?: ExecutionStatus; limit: number }): Promise<RecoveryExecutionRow[]>;
+  listAll(args: { merchantId?: string }): Promise<RecoveryExecutionRow[]>;
   countByStatus(): Promise<{ status: ExecutionStatus; count: number }[]>;
   countRetryAttempts(opportunityId: string): Promise<number>;
 }

@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { getDemoStatus } from '@/lib/api/demo';
 import { DemoCommandCenter } from '@/components/demo/demo-command-center';
+import { ModuleScenarioRunner } from '@/components/demo/module-scenario-runner';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,6 +23,7 @@ export default async function DemoPage() {
   return (
     <div className="space-y-6">
       <DemoCommandCenter initialStatus={initialStatus} />
+      <ModuleScenarioRunner />
     </div>
   );
 }

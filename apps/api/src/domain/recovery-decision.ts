@@ -189,6 +189,7 @@ export interface RecoveryDecisionStore {
     engineVersion: string
   ): Promise<RecoveryDecisionRow | null>;
   findLatestByOpportunityIds(opportunityIds: readonly string[]): Promise<RecoveryDecisionRow[]>;
+  listAll(args: { merchantId?: string }): Promise<RecoveryDecisionRow[]>;
   countByPriority(priority: DecisionPriority, merchantId?: string): Promise<number>;
   countByRecommendedAction(action: RecommendedAction, merchantId?: string): Promise<number>;
   averageConfidence(merchantId?: string): Promise<number | null>;

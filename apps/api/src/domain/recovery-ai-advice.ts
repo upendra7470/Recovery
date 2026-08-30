@@ -145,6 +145,7 @@ export interface RecoveryAIAdviceStore {
     advisorVersion: string;
     model: string;
   }): Promise<RecoveryAIAdviceRow | null>;
+  findByDecisionId(decisionId: string): Promise<RecoveryAIAdviceRow | null>;
 }
 
 // ---------------------------------------------------------------------------

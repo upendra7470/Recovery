@@ -30,6 +30,13 @@ import type {
   RecoveryExecutionRow,
   RecoveryExecutionStore,
 } from '../domain/recovery-execution.js';
+import type {
+  MerchantMemoryOverview,
+  MerchantMemoryStrategy,
+  MerchantMemoryEvidence,
+  MerchantStrategyMemoryRow,
+  MerchantStrategyMemoryStore,
+} from '../domain/merchant-memory.js';
 
 /**
  * Prisma-backed implementations of the ingestion/detection store boundaries.
@@ -296,6 +303,14 @@ export function createPrismaRecoveryDecisionStore(client: PrismaClient): Recover
       });
       return rows.map(toDecisionRow);
     },
+    async listAll(args) {
+      const where = args.merchantId !== undefined ? { merchantId: args.merchantId } : {};
+      const rows = await client.recoveryDecision.findMany({
+        where,
+        orderBy: { evaluatedAt: 'desc' },
+      });
+      return rows.map(toDecisionRow);
+    },
     async countByPriority(priority, merchantId?: string) {
       return client.recoveryDecision.count({
         where: { priority, ...(merchantId !== undefined ? { merchantId } : {}) },
@@ -380,6 +395,13 @@ export function createPrismaRecoveryAIAdviceStore(
         where: {
           decisionId_advisorVersion_model: { decisionId, advisorVersion, model },
         },
+      });
+      return row ? toAdviceRow(row) : null;
+    },
+    async findByDecisionId(decisionId) {
+      const row = await client.recoveryAIAdvice.findFirst({
+        where: { decisionId },
+        orderBy: { createdAt: 'desc' },
       });
       return row ? toAdviceRow(row) : null;
     },
@@ -489,6 +511,13 @@ export function createPrismaRecoveryExecutionStore(
         take: filters.limit,
       });
     },
+    async listAll(args) {
+      const where = args.merchantId !== undefined ? { merchantId: args.merchantId } : {};
+      return client.recoveryExecution.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+      });
+    },
     async countByStatus() {
       const grouped = await client.recoveryExecution.groupBy({
         by: ['status'],
@@ -552,4 +581,228 @@ export function createPrismaAuthenticationStore(
     },
   };
   return store;
+}
+
+// ---------------------------------------------------------------------------
+// Merchant Strategy Memory Store (Phase 11)
+// ---------------------------------------------------------------------------
+
+function toMerchantStrategyMemoryRow(row: {
+  id: string;
+  merchantId: string;
+  strategy: MerchantMemoryStrategy;
+  failureType: string;
+  attempts: number;
+  successes: number;
+  failures: number;
+  blocked: number;
+  humanReviews: number;
+  totalAmountAttempted: number;
+  totalAmountRecovered: number;
+  successRate: number;
+  recoveryRate: number;
+  sampleCount: number;
+  confidence: number;
+  effectivenessScore: number;
+  lastObservedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}): MerchantStrategyMemoryRow {
+  return {
+    id: row.id,
+    merchantId: row.merchantId,
+    strategy: row.strategy,
+    failureType: row.failureType,
+    attempts: row.attempts,
+    successes: row.successes,
+    failures: row.failures,
+    blocked: row.blocked,
+    humanReviews: row.humanReviews,
+    totalAmountAttempted: row.totalAmountAttempted,
+    totalAmountRecovered: row.totalAmountRecovered,
+    successRate: row.successRate,
+    recoveryRate: row.recoveryRate,
+    sampleCount: row.sampleCount,
+    confidence: row.confidence,
+    effectivenessScore: row.effectivenessScore,
+    lastObservedAt: row.lastObservedAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+export function createPrismaMerchantStrategyMemoryStore(
+  client: PrismaClient
+): MerchantStrategyMemoryStore {
+  return {
+    async upsert(data) {
+      const existing = await client.merchantStrategyMemory.findUnique({
+        where: {
+          merchantId_strategy_failureType: {
+            merchantId: data.merchantId,
+            strategy: data.strategy,
+            failureType: data.failureType,
+          },
+        },
+      });
+
+      if (existing !== null) {
+        return toMerchantStrategyMemoryRow(existing);
+      }
+
+      const row = await client.merchantStrategyMemory.create({ data });
+      return toMerchantStrategyMemoryRow(row);
+    },
+
+    async updateMetrics(id, metrics) {
+      const row = await client.merchantStrategyMemory.update({
+        where: { id },
+        data: metrics,
+      });
+      return toMerchantStrategyMemoryRow(row);
+    },
+
+    async findById(id) {
+      const row = await client.merchantStrategyMemory.findUnique({ where: { id } });
+      return row !== null ? toMerchantStrategyMemoryRow(row) : null;
+    },
+
+    async findByMerchantAndStrategy(merchantId, strategy, failureType) {
+      const row = await client.merchantStrategyMemory.findUnique({
+        where: {
+          merchantId_strategy_failureType: { merchantId, strategy, failureType },
+        },
+      });
+      return row !== null ? toMerchantStrategyMemoryRow(row) : null;
+    },
+
+    async listByMerchant(merchantId) {
+      const rows = await client.merchantStrategyMemory.findMany({
+        where: { merchantId },
+        orderBy: { effectivenessScore: 'desc' },
+      });
+      return rows.map((row) => toMerchantStrategyMemoryRow(row));
+    },
+
+    async getOverview(merchantId) {
+      const strategies = await this.listByMerchant(merchantId);
+
+      const totalOutcomes = strategies.reduce((sum, s) => sum + s.sampleCount, 0);
+      const totalRecovered = strategies.reduce((sum, s) => sum + s.successes, 0);
+      const totalAmountRecovered = strategies.reduce((sum, s) => sum + s.totalAmountRecovered, 0);
+      const totalAmountAttempted = strategies.reduce((sum, s) => sum + s.totalAmountAttempted, 0);
+      const recoveryRate = totalAmountAttempted > 0 ? totalAmountRecovered / totalAmountAttempted : 0;
+
+      // Find best strategy by effectiveness score
+      let bestStrategy: MerchantMemoryStrategy | null = null;
+      let bestStrategySuccessRate = 0;
+      for (const s of strategies) {
+        if (s.sampleCount >= 3 && s.effectivenessScore > bestStrategySuccessRate) {
+          bestStrategy = s.strategy;
+          bestStrategySuccessRate = s.effectivenessScore;
+        }
+      }
+
+      // Group by failure type
+      const failureTypeMap = new Map<string, { attempts: number; successes: number; bestStrategy: MerchantMemoryStrategy | null; bestRate: number }>();
+      for (const s of strategies) {
+        const existing = failureTypeMap.get(s.failureType);
+        if (existing) {
+          existing.attempts += s.attempts;
+          existing.successes += s.successes;
+          if (s.sampleCount >= 3 && s.effectivenessScore > existing.bestRate) {
+            existing.bestStrategy = s.strategy;
+            existing.bestRate = s.effectivenessScore;
+          }
+        } else {
+          failureTypeMap.set(s.failureType, {
+            attempts: s.attempts,
+            successes: s.successes,
+            bestStrategy: s.sampleCount >= 3 ? s.strategy : null,
+            bestRate: s.sampleCount >= 3 ? s.effectivenessScore : 0,
+          });
+        }
+      }
+
+      const failurePatterns: MerchantMemoryOverview['failurePatterns'] = [];
+      for (const [failureType, data] of failureTypeMap) {
+        failurePatterns.push({
+          failureType,
+          attempts: data.attempts,
+          successes: data.successes,
+          recoveryRate: data.attempts > 0 ? data.successes / data.attempts : 0,
+          bestStrategy: data.bestStrategy,
+          bestStrategySuccessRate: data.bestRate,
+        });
+      }
+
+      // Confidence assessment
+      let confidence: MerchantMemoryOverview['confidence'] = 'NO_DATA';
+      if (totalOutcomes >= 20) {
+        confidence = 'SUFFICIENT';
+      } else if (totalOutcomes > 0) {
+        confidence = 'LOW';
+      }
+
+      const lastObservedAt = strategies.reduce<Date | null>((latest, s) => {
+        if (s.lastObservedAt === null) return latest;
+        if (latest === null || s.lastObservedAt > latest) return s.lastObservedAt;
+        return latest;
+      }, null);
+
+      return {
+        merchantId,
+        totalOutcomes,
+        totalRecovered,
+        totalAmountRecovered,
+        recoveryRate,
+        bestStrategy,
+        bestStrategySuccessRate,
+        strategies,
+        failurePatterns,
+        confidence,
+        lastObservedAt,
+      };
+    },
+
+    async getEvidenceForAI(merchantId) {
+      const strategies = await this.listByMerchant(merchantId);
+      const totalOutcomes = strategies.reduce((sum, s) => sum + s.sampleCount, 0);
+      const totalAmountRecovered = strategies.reduce((sum, s) => sum + s.totalAmountRecovered, 0);
+      const totalAmountAttempted = strategies.reduce((sum, s) => sum + s.totalAmountAttempted, 0);
+      const overallRecoveryRate = totalAmountAttempted > 0 ? totalAmountRecovered / totalAmountAttempted : 0;
+
+      let confidenceLevel: MerchantMemoryEvidence['confidenceLevel'] = 'NO_DATA';
+      if (totalOutcomes >= 20) {
+        confidenceLevel = 'SUFFICIENT';
+      } else if (totalOutcomes > 0) {
+        confidenceLevel = 'LOW';
+      }
+
+      return {
+        merchantId,
+        strategyPerformance: strategies
+          .filter((s) => s.sampleCount > 0)
+          .map((s) => ({
+            strategy: s.strategy,
+            failureType: s.failureType,
+            attempts: s.attempts,
+            successes: s.successes,
+            successRate: s.successRate,
+            totalAmountRecovered: s.totalAmountRecovered,
+            confidence: s.confidence,
+          })),
+        overallRecoveryRate,
+        totalOutcomes,
+        confidenceLevel,
+      };
+    },
+
+    async deleteByMerchant(merchantId) {
+      const result = await client.merchantStrategyMemory.deleteMany({
+        where: { merchantId },
+      });
+      return result.count;
+    },
+  };
 }
