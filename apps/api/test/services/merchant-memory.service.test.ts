@@ -28,7 +28,7 @@ describe('MerchantMemoryService', () => {
       expect(overview.totalRecovered).toBe(1);
       expect(overview.totalAmountRecovered).toBe(249900);
       expect(overview.strategies).toHaveLength(1);
-      expect(overview.strategies[0].successRate).toBe(1);
+      expect(overview.strategies[0]!.successRate).toBe(1);
     });
 
     it('records a failed outcome', async () => {
@@ -44,7 +44,7 @@ describe('MerchantMemoryService', () => {
       const overview = await service.getOverview('merchant-1');
       expect(overview.totalOutcomes).toBe(1);
       expect(overview.totalRecovered).toBe(0);
-      expect(overview.strategies[0].successRate).toBe(0);
+      expect(overview.strategies[0]!.successRate).toBe(0);
     });
 
     it('accumulates multiple outcomes', async () => {
@@ -55,7 +55,7 @@ describe('MerchantMemoryService', () => {
       const overview = await service.getOverview('merchant-1');
       expect(overview.totalOutcomes).toBe(3);
       expect(overview.totalRecovered).toBe(2);
-      expect(overview.strategies[0].successRate).toBeCloseTo(2 / 3);
+      expect(overview.strategies[0]!.successRate).toBeCloseTo(2 / 3);
     });
 
     it('calculates effectiveness score correctly', async () => {
@@ -65,7 +65,7 @@ describe('MerchantMemoryService', () => {
       }
 
       const overview = await service.getOverview('merchant-1');
-      expect(overview.strategies[0].effectivenessScore).toBeGreaterThan(50);
+      expect(overview.strategies[0]!.effectivenessScore).toBeGreaterThan(50);
     });
   });
 
@@ -75,7 +75,7 @@ describe('MerchantMemoryService', () => {
 
       const overview = await service.getOverview('merchant-1');
       expect(overview.strategies).toHaveLength(1);
-      expect(overview.strategies[0].blocked).toBe(1);
+      expect(overview.strategies[0]!.blocked).toBe(1);
     });
 
     it('increments blocked count on repeated calls', async () => {
@@ -83,7 +83,7 @@ describe('MerchantMemoryService', () => {
       await service.recordBlocked('merchant-1', 'DO_NOT_RETRY', 'expired_card');
 
       const overview = await service.getOverview('merchant-1');
-      expect(overview.strategies[0].blocked).toBe(2);
+      expect(overview.strategies[0]!.blocked).toBe(2);
     });
   });
 
@@ -93,7 +93,7 @@ describe('MerchantMemoryService', () => {
 
       const overview = await service.getOverview('merchant-1');
       expect(overview.strategies).toHaveLength(1);
-      expect(overview.strategies[0].humanReviews).toBe(1);
+      expect(overview.strategies[0]!.humanReviews).toBe(1);
     });
   });
 
@@ -161,8 +161,8 @@ describe('MerchantMemoryService', () => {
 
       const evidence = await service.getEvidenceForAI('merchant-1');
       expect(evidence.strategyPerformance).toHaveLength(1);
-      expect(evidence.strategyPerformance[0].strategy).toBe('RETRY');
-      expect(evidence.strategyPerformance[0].successRate).toBe(1);
+      expect(evidence.strategyPerformance[0]!.strategy).toBe('RETRY');
+      expect(evidence.strategyPerformance[0]!.successRate).toBe(1);
     });
   });
 

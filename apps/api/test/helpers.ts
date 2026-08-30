@@ -128,7 +128,7 @@ export function createMerchantStrategyMemoryStoreMock(
       const row: MerchantStrategyMemoryRow = {
         id: randomUUID(),
         merchantId: data.merchantId,
-        strategy: data.strategy,
+        strategy: data.strategy as MerchantStrategyMemoryRow['strategy'],
         failureType: data.failureType,
         attempts: 0,
         successes: 0,
@@ -181,7 +181,7 @@ export function createMerchantStrategyMemoryStoreMock(
       const totalAmountAttempted = strategies.reduce((sum, s) => sum + s.totalAmountAttempted, 0);
 
       // Find best strategy by effectiveness score (min 3 samples)
-      let bestStrategy: string | null = null;
+      let bestStrategy: MerchantStrategyMemoryRow['strategy'] | null = null;
       let bestStrategySuccessRate = 0;
       for (const s of strategies) {
         if (s.sampleCount >= 3 && s.effectivenessScore > bestStrategySuccessRate) {
@@ -191,7 +191,7 @@ export function createMerchantStrategyMemoryStoreMock(
       }
 
       // Group by failure type
-      const failureTypeMap = new Map<string, { attempts: number; successes: number; bestStrategy: string | null; bestRate: number }>();
+      const failureTypeMap = new Map<string, { attempts: number; successes: number; bestStrategy: MerchantStrategyMemoryRow['strategy'] | null; bestRate: number }>();
       for (const s of strategies) {
         const existing = failureTypeMap.get(s.failureType);
         if (existing) {
@@ -893,6 +893,13 @@ export class InMemoryRecoveryAIAdviceStore implements RecoveryAIAdviceStore {
   }): Promise<RecoveryAIAdviceRow | null> {
     return this.rows.get(adviceKey(args.decisionId, args.advisorVersion, args.model)) ?? null;
   }
+
+  async findByDecisionId(decisionId: string): Promise<RecoveryAIAdviceRow | null> {
+    for (const row of this.rows.values()) {
+      if (row.decisionId === decisionId) return row;
+    }
+    return null;
+  }
 }
 
 /** Deterministic valid content builders for fake advisors/tests. */
@@ -1166,6 +1173,12 @@ export class InMemoryRecoveryExecutionStore implements RecoveryExecutionStore {
     return [...this.rows.values()].filter(
       (row) => row.opportunityId === opportunityId && row.action === 'RETRY' && row.status !== 'BLOCKED'
     ).length;
+  }
+
+  async listAll(args: { merchantId?: string }): Promise<RecoveryExecutionRow[]> {
+    return [...this.rows.values()]
+      .filter((row) => args.merchantId === undefined || row.merchantId === args.merchantId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 }
 
