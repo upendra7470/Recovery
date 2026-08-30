@@ -35,37 +35,7 @@ export class FailedPaymentModuleAdapter implements RecoveryModuleAdapter {
 
   // eslint-disable-next-line @typescript-eslint/require-await
   async execute(request: ModuleExecutionRequest): Promise<ModuleExecutionResult> {
-    if (request.recommendedAction === 'DO_NOT_RETRY') {
-      return {
-        outcome: 'blocked',
-        adapterName: this.name,
-        actionSummary: 'Automated retry blocked by safety policy (hard decline / expired card).',
-        isRecovered: false,
-        recoveredAmount: 0,
-        policyDetails: [
-          { name: 'Retry Limit', passed: true, detail: 'Within allowed threshold' },
-          { name: 'Failure Classification', passed: false, detail: 'Hard decline / expired instrument' },
-          { name: 'Safety Gate', passed: false, detail: 'Execution blocked to prevent customer churn' },
-        ],
-        details: { action: 'BLOCKED', reason: 'Hard decline' },
-      };
-    }
-
-    if (request.recommendedAction === 'REVIEW') {
-      return {
-        outcome: 'review_required',
-        adapterName: this.name,
-        actionSummary: 'Ambiguous payment state queued for human operator review.',
-        isRecovered: false,
-        recoveredAmount: 0,
-        policyDetails: [
-          { name: 'Confidence Gate', passed: false, detail: 'AI/Decision confidence below 60%' },
-          { name: 'Safety Gate', passed: false, detail: 'Operator verification required before debit' },
-        ],
-        details: { action: 'REVIEW_QUEUED', reason: 'Low confidence / ambiguous response' },
-      };
-    }
-
+    // Safety gate is authoritative — if we reach the adapter, execution is authorized.
     const shortId = request.opportunityId.slice(0, 8);
     return {
       outcome: 'executed',
@@ -78,7 +48,7 @@ export class FailedPaymentModuleAdapter implements RecoveryModuleAdapter {
         { name: 'Retry Limit', passed: true, detail: '1 of 3 allowed attempts used' },
         { name: 'Amount Threshold', passed: true, detail: 'Within merchant policy ceiling' },
         { name: 'Failure Classification', passed: true, detail: 'Transient gateway error' },
-        { name: 'Safety Gate', passed: true, detail: 'All 5 safety guardrails passed' },
+        { name: 'Safety Gate', passed: true, detail: 'All guardrails passed' },
       ],
       details: { action: 'RETRY_DISPATCHED', method: 'card_retry' },
     };
@@ -97,21 +67,7 @@ export class SubscriptionModuleAdapter implements RecoveryModuleAdapter {
     const shortId = request.opportunityId.slice(0, 8);
     const plan = (request.context['planName'] as string) ?? 'Pro Plan';
 
-    if (request.recommendedAction === 'DO_NOT_RETRY') {
-      return {
-        outcome: 'blocked',
-        adapterName: this.name,
-        actionSummary: `Subscription renewal for ${plan} halted: customer marked churn risk or inactive.`,
-        isRecovered: false,
-        recoveredAmount: 0,
-        policyDetails: [
-          { name: 'Subscription Active', passed: false, detail: 'Subscription cancelled or expired' },
-          { name: 'Safety Gate', passed: false, detail: 'Halting renewal retries' },
-        ],
-        details: { plan, status: 'CANCELLED_PREVENTED' },
-      };
-    }
-
+    // Safety gate is authoritative — if we reach the adapter, execution is authorized.
     return {
       outcome: 'executed',
       adapterName: this.name,
@@ -123,7 +79,7 @@ export class SubscriptionModuleAdapter implements RecoveryModuleAdapter {
         { name: 'Subscription Status', passed: true, detail: 'Active SaaS subscription' },
         { name: 'Billing History', passed: true, detail: 'Good historical standing (>12 mo)' },
         { name: 'Retry Timing Cooldown', passed: true, detail: 'Scheduled outside high-traffic window' },
-        { name: 'Safety Policy', passed: true, detail: 'Grace period protection active' },
+        { name: 'Safety Gate', passed: true, detail: 'Authorized by deterministic safety policy' },
       ],
       details: {
         plan,
@@ -146,24 +102,7 @@ export class MandateModuleAdapter implements RecoveryModuleAdapter {
     const mandateStatus = (request.context['mandateStatus'] as string) ?? 'ACTIVE';
     const retryCount = (request.context['retryCount'] as number) ?? 0;
 
-    // Safety policy: Max 2 retries per billing cycle on autodebits to avoid penalty bounce charges
-    if (retryCount >= 2 || mandateStatus !== 'ACTIVE' || request.recommendedAction === 'DO_NOT_RETRY') {
-      return {
-        outcome: 'blocked',
-        adapterName: this.name,
-        actionSummary: `Mandate debit blocked: ${retryCount >= 2 ? 'Max 2 attempts per cycle reached' : 'Mandate inactive/revoked'}.`,
-        isRecovered: false,
-        recoveredAmount: 0,
-        policyDetails: [
-          { name: 'Mandate Active Check', passed: mandateStatus === 'ACTIVE', detail: `Status: ${mandateStatus}` },
-          { name: 'NPCI / Bank Cooldown', passed: false, detail: '24-hour inter-bank cooldown required' },
-          { name: 'Max Mandate Retries', passed: false, detail: `${retryCount} / 2 attempts used (capped)` },
-          { name: 'Safety Gate', passed: false, detail: 'Blocked to protect customer from bounce charges' },
-        ],
-        details: { mandateStatus, retryCount, reason: 'POLICY_LIMIT_REACHED' },
-      };
-    }
-
+    // Safety gate is authoritative — if we reach the adapter, execution is authorized.
     const shortId = request.opportunityId.slice(0, 8);
     return {
       outcome: 'executed',
@@ -173,12 +112,12 @@ export class MandateModuleAdapter implements RecoveryModuleAdapter {
       isRecovered: true,
       recoveredAmount: request.amount,
       policyDetails: [
-        { name: 'Mandate Active Check', passed: true, detail: 'e-Mandate registered and active' },
+        { name: 'Mandate Active Check', passed: mandateStatus === 'ACTIVE', detail: `Status: ${mandateStatus}` },
         { name: 'Bank Clearing Window', passed: true, detail: 'Representment within NACH/e-Sign cycle' },
-        { name: 'Retry Limit', passed: true, detail: '1 of 2 allowed attempts' },
-        { name: 'Safety Policy', passed: true, detail: 'Bank bounce protection passed' },
+        { name: 'Retry Limit', passed: true, detail: `${retryCount + 1} of 2 allowed attempts` },
+        { name: 'Safety Gate', passed: true, detail: 'Authorized by deterministic safety policy' },
       ],
-      details: { mandateStatus, clearingWindow: '09:00 - 11:30 IST' },
+      details: { mandateStatus, retryCount, clearingWindow: '09:00 - 11:30 IST' },
     };
   }
 }
@@ -262,7 +201,9 @@ export class PaymentDegradationModuleAdapter implements RecoveryModuleAdapter {
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars, @typescript-eslint/require-await
   async execute(_request: ModuleExecutionRequest): Promise<ModuleExecutionResult> {
-    // This adapter enforces a deliberate PAUSE / BLOCK on immediate retries
+    // Module-specific policy: during gateway degradation, automated retries
+    // are paused to protect merchant score and prevent cascade failures.
+    // This is module-specific knowledge that the generic safety gate doesn't have.
     return {
       outcome: 'blocked',
       adapterName: this.name,
@@ -270,16 +211,16 @@ export class PaymentDegradationModuleAdapter implements RecoveryModuleAdapter {
       isRecovered: false,
       recoveredAmount: 0,
       policyDetails: [
-        { name: 'Gateway Health Anomaly', passed: false, detail: 'Success rate dropped below 70% threshold' },
-        { name: 'Circuit Breaker Status', passed: false, detail: 'TRIPPED — Immediate retries suspended' },
+        { name: 'Gateway Health Anomaly', passed: false, detail: 'Success rate dropped below threshold' },
+        { name: 'Circuit Breaker Status', passed: false, detail: 'ACTIVE — Immediate retries suspended' },
         { name: 'Merchant Protection Rule', passed: true, detail: 'Shielding merchant score from excessive declines' },
-        { name: 'Deterministic Safety Gate', passed: false, detail: 'BLOCKED — Awaiting gateway recovery cooldown' },
+        { name: 'Safety Gate', passed: true, detail: 'Authorized by safety policy, but module adapter blocked per degradation protocol' },
       ],
       details: {
         action: 'PAUSE_RETRIES',
-        circuitBreaker: 'TRIPPED',
+        circuitBreaker: 'ACTIVE',
         gatewayStatus: 'DEGRADED',
-        reason: 'Elevated bank decline cluster detected',
+        reason: 'Module-specific degradation protection protocol',
       },
     };
   }
