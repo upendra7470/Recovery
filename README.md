@@ -7,17 +7,6 @@ understand where revenue is leaking, decide how to recover it safely, execute
 approved recovery actions, verify outcomes, and measure the revenue actually
 recovered.
 
-> **Status: Phase 11.2 — Live RecoveryOS Demo Command Center.**
-> RecoveryOS ingests Razorpay payment events, detects revenue leakage, scores
-> every opportunity deterministically, and pairs explainable AI advice with strict
-> deterministic safety policies. Phase 11.2 introduces the interactive
-> **Live Demo Command Center** (`/demo`), allowing judges and operators to trigger
-> live end-to-end recovery scenarios (Successful ₹2,499 recovery, Unsafe ₹1,500 blocked
-> retry, and Ambiguous ₹999 human review) with progressive real-time telemetry,
-> visual pipeline flows, and verified cross-dashboard ledger state.
-
----
-
 ## 1. The problem RecoveryOS will solve
 
 Payment platforms lose significant revenue to failed payments, expired mandates,
