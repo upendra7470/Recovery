@@ -65,7 +65,34 @@ export class RecoveryAIAdvisorService {
     private readonly logger?: AILogger
   ) {}
 
-  async getAdviceForOpportunity(opportunityId: string): Promise<AIAdviceOutcome> {
+  async getAdviceForOpportunity(
+    opportunityId: string,
+    strategyContext?: {
+      moduleType: string;
+      candidateStrategies: Array<{
+        strategy: string;
+        label: string;
+        isDefault: boolean;
+        executable: boolean;
+      }>;
+      merchantHistory?: {
+        confidence: 'SUFFICIENT' | 'LOW' | 'INSUFFICIENT';
+        totalSamples: number;
+        strategyPerformance: Array<{
+          strategy: string;
+          successRate: number;
+          effectivenessScore: number;
+          confidence: number;
+          sampleCount: number;
+        }>;
+      };
+      deterministicStrategyRecommendation?: {
+        strategy: string;
+        reason: string;
+        score: number;
+      };
+    }
+  ): Promise<AIAdviceOutcome> {
     const startedAt = Date.now();
     this.logger?.info(
       { event: 'ai_advice_requested', opportunityId },
@@ -121,7 +148,8 @@ export class RecoveryAIAdvisorService {
     const request = buildRequestFrom(
       resolved.opportunity,
       resolved.features,
-      outcome.decision
+      outcome.decision,
+      strategyContext
     );
     const result = await this.generateSafely(request);
 
@@ -223,10 +251,35 @@ function buildRequestFrom(
     observedFailedRetries: number;
     historicalOutcomes: { sampleSize: number; recoveredCount: number } | null;
   },
-  decision: RecoveryDecisionRow
+  decision: RecoveryDecisionRow,
+  strategyContext?: {
+    moduleType: string;
+    candidateStrategies: Array<{
+      strategy: string;
+      label: string;
+      isDefault: boolean;
+      executable: boolean;
+    }>;
+    merchantHistory?: {
+      confidence: 'SUFFICIENT' | 'LOW' | 'INSUFFICIENT';
+      totalSamples: number;
+      strategyPerformance: Array<{
+        strategy: string;
+        successRate: number;
+        effectivenessScore: number;
+        confidence: number;
+        sampleCount: number;
+      }>;
+    };
+    deterministicStrategyRecommendation?: {
+      strategy: string;
+      reason: string;
+      score: number;
+    };
+  }
 ): RecoveryAIAdviceRequest {
   const stats = features.historicalOutcomes;
-  return {
+  const request: RecoveryAIAdviceRequest = {
     opportunityId: opportunity.id,
     opportunityType: opportunity.type,
     currency: opportunity.currency,
@@ -246,6 +299,16 @@ function buildRequestFrom(
         ? null
         : Math.round((stats.recoveredCount / stats.sampleSize) * 1000) / 10,
   };
+
+  // Phase 12.3: Add strategy intelligence context if available
+  if (strategyContext !== undefined) {
+    request.moduleType = strategyContext.moduleType;
+    request.candidateStrategies = strategyContext.candidateStrategies;
+    request.merchantHistory = strategyContext.merchantHistory;
+    request.deterministicStrategyRecommendation = strategyContext.deterministicStrategyRecommendation;
+  }
+
+  return request;
 }
 
 function sha256(input: string): string {

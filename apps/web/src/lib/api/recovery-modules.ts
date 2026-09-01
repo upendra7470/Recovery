@@ -134,6 +134,36 @@ export interface ModuleScenarioResponse {
     badge?: string;
     badgeTone?: string;
   }>;
+  /** Phase 12.3: Strategy intelligence from merchant memory. */
+  strategyIntelligence?: {
+    ranking: {
+      strategies: Array<{
+        strategy: string;
+        label: string;
+        score: number;
+        successRate: number;
+        effectivenessScore: number;
+        confidence: number;
+        sampleCount: number;
+        isDefault: boolean;
+        executable: boolean;
+      }>;
+      confidence: 'SUFFICIENT' | 'LOW' | 'INSUFFICIENT';
+      recommended: string;
+      reason: string;
+      isColdStart: boolean;
+      totalSamples: number;
+    };
+    candidateStrategies: Array<{
+      strategy: string;
+      label: string;
+      isDefault: boolean;
+      executable: boolean;
+    }>;
+    executedStrategy: string;
+    aiStrategyValidated: boolean;
+    aiRecommendation?: string;
+  };
 }
 
 export async function getRecoveryModulesOverview(): Promise<RecoveryModulesOverview | null> {

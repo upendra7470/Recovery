@@ -8,6 +8,7 @@ import type { RecoveryExecutionService } from './recovery-execution.service.js';
 import type { MerchantMemoryService } from './merchant-memory.service.js';
 import type { NormalizedPaymentEventData } from '../domain/payment-event.js';
 import type { RecoveryModuleExecutionService } from './recovery-module-execution.service.js';
+import type { StrategyRanking } from './strategy-ranking.js';
 
 /**
  * Demo Mode (Phase 11.2 — Live RecoveryOS Demo Command Center).
@@ -75,6 +76,27 @@ export interface ModuleScenarioResult {
   recoveredAmount: number;
   description: string;
   stages: DemoStageTrace[];
+  /** Phase 12.3: Strategy intelligence from merchant memory. */
+  strategyIntelligence?: StrategyIntelligenceResult;
+}
+
+/** Phase 12.3 — Strategy intelligence included in demo results. */
+export interface StrategyIntelligenceResult {
+  /** The ranked strategies from merchant memory. */
+  ranking: StrategyRanking;
+  /** Candidate strategies for this module. */
+  candidateStrategies: Array<{
+    strategy: string;
+    label: string;
+    isDefault: boolean;
+    executable: boolean;
+  }>;
+  /** The strategy actually used for this execution. */
+  executedStrategy: string;
+  /** Whether the AI strategy was validated against candidates. */
+  aiStrategyValidated: boolean;
+  /** AI recommendation if available. */
+  aiRecommendation?: string;
 }
 
 export interface DemoStageTrace {
@@ -1761,6 +1783,42 @@ export class DemoService {
     amount: number,
     errorCode: string
   ): Promise<Omit<ModuleScenarioResult, 'scenario' | 'moduleType' | 'scenarioName' | 'opportunityId' | 'paymentId' | 'orderId' | 'amount' | 'currency' | 'stages'>> {
+    // Phase 12.3: Get strategy ranking from merchant memory
+    const { rankStrategies } = await import('./strategy-ranking.js');
+    const { getStrategyCandidates } = await import('../modules/module-strategies.js');
+    
+    // Detect module type from opportunity evidence
+    const opportunity = await this.db.recoveryOpportunity.findById(opportunityId);
+    const evidence = opportunity?.evidence as Record<string, unknown> | undefined;
+    let moduleType: string = 'FAILED_PAYMENT';
+    if (evidence) {
+      if (evidence['moduleType']) {
+        moduleType = evidence['moduleType'] as string;
+      } else if (evidence['invoiceId'] || evidence['businessName']) {
+        moduleType = 'B2B_RECEIVABLE';
+      } else if (evidence['mandateId']) {
+        moduleType = 'MANDATE_RETRY';
+      } else if (evidence['degradationMetrics']) {
+        moduleType = 'PAYMENT_DEGRADATION';
+      } else if (evidence['subscriptionId']) {
+        moduleType = 'SUBSCRIPTION_RECOVERY';
+      } else if (evidence['cartValue']) {
+        moduleType = 'CHECKOUT_DROPOFF';
+      }
+    }
+
+    // Get strategy candidates and ranking
+    const candidateStrategies = getStrategyCandidates(moduleType as 'FAILED_PAYMENT' | 'SUBSCRIPTION_RECOVERY' | 'MANDATE_RETRY' | 'B2B_RECEIVABLE' | 'CHECKOUT_DROPOFF' | 'PAYMENT_DEGRADATION');
+    
+    // Get merchant memory overview for ranking
+    const memoryOverview = await this.merchantMemoryService.getOverview(DEMO_MERCHANT_ID);
+    const strategyRanking = rankStrategies(
+      DEMO_MERCHANT_ID,
+      moduleType as 'FAILED_PAYMENT' | 'SUBSCRIPTION_RECOVERY' | 'MANDATE_RETRY' | 'B2B_RECEIVABLE' | 'CHECKOUT_DROPOFF' | 'PAYMENT_DEGRADATION',
+      opportunity?.reason || errorCode || 'UNKNOWN',
+      memoryOverview.strategies ?? []
+    );
+
     // AI advisory is still generated for display purposes
     const decisionOutcome = await this.decisionService.getForOpportunity(opportunityId);
     const decision = decisionOutcome.decision;
@@ -1770,7 +1828,31 @@ export class DemoService {
     const decisionPriority = decision?.priority ?? 'HIGH';
     const decisionReasons = decision?.reasons ?? ['Deterministic decision engine analysis'];
 
-    const aiOutcome = await this.aiAdvisorService.getAdviceForOpportunity(opportunityId);
+    const aiOutcome = await this.aiAdvisorService.getAdviceForOpportunity(opportunityId, {
+      moduleType,
+      candidateStrategies: candidateStrategies.map((c) => ({
+        strategy: c.strategy,
+        label: c.label,
+        isDefault: c.isDefault,
+        executable: c.executable,
+      })),
+      merchantHistory: {
+        confidence: strategyRanking.confidence,
+        totalSamples: strategyRanking.totalSamples,
+        strategyPerformance: strategyRanking.strategies.map((s) => ({
+          strategy: s.strategy,
+          successRate: s.successRate,
+          effectivenessScore: s.effectivenessScore,
+          confidence: s.confidence,
+          sampleCount: s.sampleCount,
+        })),
+      },
+      deterministicStrategyRecommendation: {
+        strategy: strategyRanking.recommended,
+        reason: strategyRanking.reason,
+        score: strategyRanking.strategies.find((s) => s.strategy === strategyRanking.recommended)?.score ?? 0,
+      },
+    });
     const aiAdvice = aiOutcome.ai.status === 'available'
       ? {
           summary: aiOutcome.ai.advice.summary,
@@ -1870,6 +1952,18 @@ export class DemoService {
         : executionStatus === 'BLOCKED'
           ? `Blocked by safety policy: ${strategy}`
           : `Action ${decisionAction} applied`,
+      strategyIntelligence: {
+        ranking: strategyRanking,
+        candidateStrategies: candidateStrategies.map((c) => ({
+          strategy: c.strategy,
+          label: c.label,
+          isDefault: c.isDefault,
+          executable: c.executable,
+        })),
+        executedStrategy: strategy,
+        aiStrategyValidated: true,
+        aiRecommendation: aiAdvice?.summary,
+      },
     };
   }
 

@@ -10,6 +10,7 @@ import {
   createPrismaRecoveryOpportunityStore,
   createPrismaAuthenticationStore,
   createPrismaMerchantStrategyMemoryStore,
+  createPrismaSimulationRunStore,
 } from '../repositories/prisma-stores.js';
 
 export type { PrismaClient };
@@ -51,5 +52,6 @@ export function createAppDatabase(client: PrismaClient): AppDatabase {
     recoveryExecution: createPrismaRecoveryExecutionStore(client),
     auth: createPrismaAuthenticationStore(client),
     merchantStrategyMemory: createPrismaMerchantStrategyMemoryStore(client),
+    simulationRun: createPrismaSimulationRunStore(client),
   };
 }

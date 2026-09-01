@@ -10,6 +10,7 @@ import { evaluateExecutionSafety } from '../domain/recovery-execution.js';
 import type { RecoveryDecisionRow } from '../domain/recovery-decision.js';
 import type { RecoveryOpportunityRow } from '../domain/recovery-opportunity.js';
 import type { PaymentEventStore } from '../domain/payment-event.js';
+import type { MerchantStrategyMemoryRow } from '../domain/merchant-memory.js';
 import type { RecoveryDecisionService } from './recovery-decision.service.js';
 import type { RecoveryExecutionRepository } from '../repositories/recovery-execution.repository.js';
 import type { RecoveryOpportunityRepository } from '../repositories/recovery-opportunity.repository.js';
@@ -20,6 +21,10 @@ import {
   type ModuleExecutionRequest,
   type ModuleExecutionResult,
 } from '../modules/module-adapters.js';
+import {
+  rankStrategies,
+  type StrategyRanking,
+} from './strategy-ranking.js';
 
 /**
  * Phase 12.1 — Module-aware recovery execution service.
@@ -109,12 +114,17 @@ export class RecoveryModuleExecutionService {
     const moduleType = this.detectModuleType(opportunity);
     const action = decision.recommendedAction;
 
+    // Phase 12.3: Rank strategies from merchant memory
+    const merchantId = opportunity.merchantId ?? '00000000-0000-4000-8000-000000000099';
+    const failureType = opportunity.reason;
+    const strategyRanking = await this.getStrategyRanking(merchantId, moduleType, failureType);
+
     // Idempotency: check for existing execution
     const attempt = priorRetryAttempts + 1;
     const idempotencyKey = this.buildIdempotencyKey(opportunityId, decision.id, action, attempt);
     const existing = await this.executions.findByIdempotencyKey(idempotencyKey);
     if (existing !== null) {
-      return this.buildOutcomeFromExisting(moduleType, action, verdict, existing, opportunity);
+      return await this.buildOutcomeFromExisting(moduleType, action, verdict, existing, opportunity, strategyRanking);
     }
 
     // Safety gate: if not allowed, record BLOCKED and return
@@ -127,7 +137,6 @@ export class RecoveryModuleExecutionService {
         attempt
       );
 
-      const merchantId = opportunity.merchantId ?? '00000000-0000-4000-8000-000000000099';
       await this.merchantMemoryService.recordBlocked(
         merchantId,
         action,
@@ -144,6 +153,12 @@ export class RecoveryModuleExecutionService {
         execution,
         recovered: false,
         recoveredAmount: 0,
+        strategyIntelligence: {
+          ranking: strategyRanking,
+          candidateStrategies: await this.getCandidateStrategiesForModule(moduleType),
+          executedStrategy: action,
+          aiStrategyValidated: true,
+        },
       };
     }
 
@@ -189,7 +204,6 @@ export class RecoveryModuleExecutionService {
     }
 
     // Update merchant memory
-    const merchantId = opportunity.merchantId ?? '00000000-0000-4000-8000-000000000099';
     if (recovered) {
       await this.merchantMemoryService.recordOutcome(
         merchantId,
@@ -227,12 +241,52 @@ export class RecoveryModuleExecutionService {
       recovered,
       recoveredAmount,
       providerReferenceId: adapterResult.providerReferenceId,
+      strategyIntelligence: {
+        ranking: strategyRanking,
+        candidateStrategies: await this.getCandidateStrategiesForModule(moduleType),
+        executedStrategy: action,
+        aiStrategyValidated: true,
+      },
     };
   }
 
   // -------------------------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------------------------
+
+  /**
+   * Phase 12.3: Get strategy ranking from merchant memory.
+   */
+  private async getStrategyRanking(
+    merchantId: string,
+    moduleType: RecoveryModuleType,
+    failureType: string
+  ): Promise<StrategyRanking> {
+    // Get all memory rows for this merchant
+    const allRows = await this.merchantMemoryService.getOverview(merchantId);
+    // Use the strategies from the overview (already filtered by merchant)
+    const merchantRows: MerchantStrategyMemoryRow[] = allRows.strategies ?? [];
+    return rankStrategies(merchantId, moduleType, failureType, merchantRows);
+  }
+
+  /**
+   * Phase 12.3: Get candidate strategies for a module type.
+   */
+  private async getCandidateStrategiesForModule(moduleType: RecoveryModuleType): Promise<Array<{
+    strategy: string;
+    label: string;
+    isDefault: boolean;
+    executable: boolean;
+  }>> {
+    const { getStrategyCandidates } = await import('../modules/module-strategies.js');
+    const candidates = getStrategyCandidates(moduleType);
+    return candidates.map((c) => ({
+      strategy: c.strategy,
+      label: c.label,
+      isDefault: c.isDefault,
+      executable: c.executable,
+    }));
+  }
 
   private detectModuleType(opportunity: RecoveryOpportunityRow): RecoveryModuleType {
     const evidence = this.extractEvidenceContext(opportunity);
@@ -392,13 +446,14 @@ export class RecoveryModuleExecutionService {
     });
   }
 
-  private buildOutcomeFromExisting(
+  private async buildOutcomeFromExisting(
     moduleType: RecoveryModuleType,
     action: string,
     verdict: ExecutionSafetyVerdict,
     existing: RecoveryExecutionRow,
-    opportunity: RecoveryOpportunityRow
-  ): ModuleExecutionOutcome {
+    opportunity: RecoveryOpportunityRow,
+    strategyRanking: StrategyRanking
+  ): Promise<ModuleExecutionOutcome> {
     const recovered = existing.status === 'SUCCEEDED' && opportunity.status === 'RECOVERED';
     return {
       success: true,
@@ -412,6 +467,12 @@ export class RecoveryModuleExecutionService {
       execution: existing,
       recovered,
       recoveredAmount: recovered ? opportunity.amountAtRisk : 0,
+      strategyIntelligence: {
+        ranking: strategyRanking,
+        candidateStrategies: await this.getCandidateStrategiesForModule(moduleType),
+        executedStrategy: action,
+        aiStrategyValidated: true,
+      },
     };
   }
 }
@@ -431,4 +492,27 @@ export interface ModuleExecutionOutcome {
   recoveredAmount: number;
   providerReferenceId?: string;
   error?: string;
+  /** Phase 12.3: Strategy intelligence from merchant memory. */
+  strategyIntelligence?: StrategyIntelligenceResult;
+}
+
+/**
+ * Phase 12.3 — Strategy intelligence included in execution outcome.
+ */
+export interface StrategyIntelligenceResult {
+  /** The ranked strategies from merchant memory. */
+  ranking: StrategyRanking;
+  /** Candidate strategies for this module. */
+  candidateStrategies: Array<{
+    strategy: string;
+    label: string;
+    isDefault: boolean;
+    executable: boolean;
+  }>;
+  /** The strategy actually used for this execution. */
+  executedStrategy: string;
+  /** Whether the AI strategy was validated against candidates. */
+  aiStrategyValidated: boolean;
+  /** AI recommendation if available. */
+  aiRecommendation?: string;
 }

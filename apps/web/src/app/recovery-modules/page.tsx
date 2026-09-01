@@ -124,12 +124,37 @@ export default async function RecoveryModulesPage() {
 
       <SectionCard title="Architecture Flow" subtitle="How modules integrate with the RecoveryOS intelligence core">
         <div className="flex flex-wrap items-center gap-2 text-sm">
-          {['Payment/Business Event', 'Module Detection', 'Recovery Opportunity', 'Recovery Intelligence', 'AI Decision', 'Safety/Policy Engine', 'Recovery Action', 'Outcome Verification', 'Recovery Ledger', 'Merchant Memory'].map((step, i) => (
+          {['Payment/Business Event', 'Module Detection', 'Failure Classification', 'Merchant Memory', 'Strategy Selection', 'AI Decision', 'Safety/Policy Engine', 'Module Execution', 'Outcome Verification', 'Recovery Ledger', 'Memory Update'].map((step, i) => (
             <span key={step} className="flex items-center gap-2">
               <span className="inline-flex items-center rounded-md bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">{step}</span>
-              {i < 9 && <span className="text-slate-400">&rarr;</span>}
+              {i < 10 && <span className="text-slate-400">&rarr;</span>}
             </span>
           ))}
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Adaptive Strategy Selection" subtitle="How RecoveryOS uses merchant-specific historical evidence to select recovery strategies">
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <h4 className="text-sm font-semibold text-slate-900 mb-2">Cold Start</h4>
+              <p className="text-xs text-slate-600">
+                When merchant history is insufficient (fewer than 5 outcomes), the system uses the module&apos;s default strategy and marks confidence as <span className="font-medium text-amber-600">INSUFFICIENT</span>.
+              </p>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <h4 className="text-sm font-semibold text-slate-900 mb-2">Adaptive Ranking</h4>
+              <p className="text-xs text-slate-600">
+                As verified outcomes accumulate, strategies are ranked by a deterministic score combining <span className="font-medium text-indigo-600">success rate</span>, <span className="font-medium text-indigo-600">effectiveness</span>, and <span className="font-medium text-indigo-600">confidence</span>.
+              </p>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <h4 className="text-sm font-semibold text-slate-900 mb-2">AI Advisory</h4>
+              <p className="text-xs text-slate-600">
+                The AI receives structured evidence including merchant history and candidate strategies, but <span className="font-medium text-rose-600">cannot invent strategies</span> or bypass the deterministic safety policy.
+              </p>
+            </div>
+          </div>
         </div>
       </SectionCard>
     </div>

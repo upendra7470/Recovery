@@ -55,6 +55,11 @@ import type {
   MerchantStrategyMemoryRow,
   MerchantStrategyMemoryStore,
 } from '../src/domain/merchant-memory.js';
+import type {
+  NewSimulationRunData,
+  SimulationRunRow,
+  SimulationRunStore,
+} from '../src/domain/simulation-run.js';
 
 export function makeTestEnv(overrides: Partial<Record<keyof AppEnv, string>> = {}): AppEnv {
   return parseEnv({
@@ -267,6 +272,61 @@ export function createMerchantStrategyMemoryStoreMock(
   };
 }
 
+export function createSimulationRunStoreMock(
+  overrides: Partial<SimulationRunStore> = {}
+): SimulationRunStore {
+  const store = new Map<string, SimulationRunRow>();
+
+  return {
+    create: vi.fn(async (data: NewSimulationRunData) => {
+      const row: SimulationRunRow = {
+        id: data.id,
+        seed: data.seed,
+        merchantCount: data.merchantCount,
+        eventsPerMerchant: data.eventsPerMerchant,
+        totalEvents: data.totalEvents,
+        status: data.status,
+        startedAt: null,
+        completedAt: null,
+        processingDurationMs: null,
+        processedEvents: 0,
+        successfulPayments: 0,
+        failedPayments: 0,
+        opportunitiesDetected: 0,
+        executionsAttempted: 0,
+        executionsBlocked: 0,
+        humanReviews: 0,
+        recoveriesVerified: 0,
+        revenueAtRisk: 0,
+        recoverableRevenue: 0,
+        recoveredRevenue: 0,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      store.set(row.id, row);
+      return row;
+    }),
+    update: vi.fn(async (id: string, data: Partial<SimulationRunRow>) => {
+      const row = store.get(id);
+      if (!row) throw new Error(`SimulationRun ${id} not found`);
+      Object.assign(row, data, { updatedAt: new Date() });
+      return row;
+    }),
+    findById: vi.fn(async (id: string) => {
+      return store.get(id) ?? null;
+    }),
+    listRecent: vi.fn(async (limit: number = 20) => {
+      return Array.from(store.values())
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        .slice(0, limit);
+    }),
+    deleteById: vi.fn(async (id: string) => {
+      return store.delete(id);
+    }),
+    ...overrides,
+  };
+}
+
 export function createDbExecutorMock(
   impl?: QueryRawMock,
   overrides: Partial<DbExecutorMock> = {}
@@ -286,6 +346,8 @@ export function createDbExecutorMock(
     auth: overrides.auth ?? createAuthenticationStoreMock(),
     merchantStrategyMemory:
       overrides.merchantStrategyMemory ?? createMerchantStrategyMemoryStoreMock(),
+    simulationRun:
+      overrides.simulationRun ?? createSimulationRunStoreMock(),
   };
 }
 

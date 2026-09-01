@@ -37,6 +37,11 @@ import type {
   MerchantStrategyMemoryRow,
   MerchantStrategyMemoryStore,
 } from '../domain/merchant-memory.js';
+import type {
+  NewSimulationRunData,
+  SimulationRunRow,
+  SimulationRunStore,
+} from '../domain/simulation-run.js';
 
 /**
  * Prisma-backed implementations of the ingestion/detection store boundaries.
@@ -81,6 +86,22 @@ export function createPrismaPaymentEventStore(client: PrismaClient): PaymentEven
           eventCreatedAt: { gte: occurredAfter, lte: occurredBefore },
         },
         orderBy: { eventCreatedAt: 'asc' },
+      });
+      return rows;
+    },
+    async findMany({ merchantId, eventCreatedAt, skip, take, orderBy } = {}) {
+      const where: Record<string, unknown> = {};
+      if (merchantId !== undefined) {
+        where.merchantId = merchantId;
+      }
+      if (eventCreatedAt !== undefined) {
+        where.eventCreatedAt = eventCreatedAt;
+      }
+      const rows = await client.paymentEvent.findMany({
+        where,
+        skip: skip ?? 0,
+        take: take ?? 100,
+        orderBy: { eventCreatedAt: orderBy ?? 'asc' },
       });
       return rows;
     },
@@ -803,6 +824,99 @@ export function createPrismaMerchantStrategyMemoryStore(
         where: { merchantId },
       });
       return result.count;
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Simulation Run Store (Phase 13.3)
+// ---------------------------------------------------------------------------
+
+function toSimulationRunRow(row: {
+  id: string;
+  seed: number;
+  merchantCount: number;
+  eventsPerMerchant: number;
+  totalEvents: number;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  startedAt: Date | null;
+  completedAt: Date | null;
+  processingDurationMs: number | null;
+  processedEvents: number;
+  successfulPayments: number;
+  failedPayments: number;
+  opportunitiesDetected: number;
+  executionsAttempted: number;
+  executionsBlocked: number;
+  humanReviews: number;
+  recoveriesVerified: number;
+  revenueAtRisk: number;
+  recoverableRevenue: number;
+  recoveredRevenue: number;
+  createdAt: Date;
+  updatedAt: Date;
+}): SimulationRunRow {
+  return {
+    id: row.id,
+    seed: row.seed,
+    merchantCount: row.merchantCount,
+    eventsPerMerchant: row.eventsPerMerchant,
+    totalEvents: row.totalEvents,
+    status: row.status,
+    startedAt: row.startedAt,
+    completedAt: row.completedAt,
+    processingDurationMs: row.processingDurationMs,
+    processedEvents: row.processedEvents,
+    successfulPayments: row.successfulPayments,
+    failedPayments: row.failedPayments,
+    opportunitiesDetected: row.opportunitiesDetected,
+    executionsAttempted: row.executionsAttempted,
+    executionsBlocked: row.executionsBlocked,
+    humanReviews: row.humanReviews,
+    recoveriesVerified: row.recoveriesVerified,
+    revenueAtRisk: row.revenueAtRisk,
+    recoverableRevenue: row.recoverableRevenue,
+    recoveredRevenue: row.recoveredRevenue,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+export function createPrismaSimulationRunStore(client: PrismaClient): SimulationRunStore {
+  return {
+    async create(data: NewSimulationRunData) {
+      const row = await client.simulationRun.create({ data });
+      return toSimulationRunRow(row);
+    },
+
+    async update(id, data) {
+      const row = await client.simulationRun.update({
+        where: { id },
+        data,
+      });
+      return toSimulationRunRow(row);
+    },
+
+    async findById(id) {
+      const row = await client.simulationRun.findUnique({ where: { id } });
+      return row ? toSimulationRunRow(row) : null;
+    },
+
+    async listRecent(limit = 20) {
+      const rows = await client.simulationRun.findMany({
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+      });
+      return rows.map(toSimulationRunRow);
+    },
+
+    async deleteById(id) {
+      try {
+        await client.simulationRun.delete({ where: { id } });
+        return true;
+      } catch {
+        return false;
+      }
     },
   };
 }

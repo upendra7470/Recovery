@@ -20,6 +20,7 @@ import { readyRoutes } from './routes/ready.js';
 import { webhookRoutes } from './routes/webhooks.js';
 import { merchantMemoryRoutes } from './routes/merchant-memory.js';
 import { recoveryModuleRoutes } from './routes/recovery-modules.js';
+import { simulationRoutes } from './routes/simulation.js';
 import { RecoveryOpportunityRepository } from './repositories/recovery-opportunity.repository.js';
 import { RecoveryDecisionRepository } from './repositories/recovery-decision.repository.js';
 import { AuthenticationService } from './auth/authentication.service.js';
@@ -239,6 +240,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(demoRoutes);
   await app.register(merchantMemoryRoutes);
   await app.register(recoveryModuleRoutes);
+  await app.register(simulationRoutes);
 
   app.addHook('onClose', async () => {
     await closeDatabase();

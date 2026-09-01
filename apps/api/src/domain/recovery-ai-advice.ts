@@ -57,6 +57,34 @@ export interface RecoveryAIAdviceRequest {
   reasons: readonly string[];
   riskFlags: readonly { flag: string; explanation: string }[];
   historicalRecoveryRatePercent: number | null;
+  // --- Phase 12.3: strategy intelligence context ---
+  /** Module type for strategy candidate validation. */
+  moduleType?: string;
+  /** Candidate strategies valid for this module. */
+  candidateStrategies?: readonly {
+    strategy: string;
+    label: string;
+    isDefault: boolean;
+    executable: boolean;
+  }[];
+  /** Merchant-specific historical strategy performance. */
+  merchantHistory?: {
+    confidence: 'SUFFICIENT' | 'LOW' | 'INSUFFICIENT';
+    totalSamples: number;
+    strategyPerformance: readonly {
+      strategy: string;
+      successRate: number;
+      effectivenessScore: number;
+      confidence: number;
+      sampleCount: number;
+    }[];
+  };
+  /** The deterministic strategy recommendation based on merchant memory. */
+  deterministicStrategyRecommendation?: {
+    strategy: string;
+    reason: string;
+    score: number;
+  };
 }
 
 /**

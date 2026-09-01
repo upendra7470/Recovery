@@ -128,6 +128,17 @@ export interface PaymentEventStore {
     occurredAfter: Date;
     occurredBefore: Date;
   }): Promise<PaymentEventRow[]>;
+  /**
+   * Find payment events matching filters, with pagination.
+   * Used by the replay engine to load synthetic events for processing.
+   */
+  findMany?(args: {
+    merchantId?: string;
+    eventCreatedAt?: { gte?: Date; lte?: Date };
+    skip?: number;
+    take?: number;
+    orderBy?: 'asc' | 'desc';
+  }): Promise<PaymentEventRow[]>;
 }
 
 /** Read-only lookup boundary for payment accounts during ingestion. */
