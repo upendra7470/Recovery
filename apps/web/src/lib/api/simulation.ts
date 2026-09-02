@@ -1,4 +1,4 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://127.0.0.1:4000';
+import { apiRequest, ApiError } from './client';
 
 export interface SimulationRun {
   id: string;
@@ -68,44 +68,15 @@ export interface SimulationStartResponse {
   merchantCount: number;
 }
 
-export class SimulationApiError extends Error {
+export class SimulationApiError extends ApiError {
   constructor(
-    public readonly code: string,
+    code: string,
     message: string,
-    public readonly status: number = 500
+    status: number = 500
   ) {
-    super(message);
+    super(code, message, status);
     this.name = 'SimulationApiError';
   }
-}
-
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const url = `${API_BASE}${path}`;
-  const headers: Record<string, string> = {};
-  if (options?.body) {
-    headers['Content-Type'] = 'application/json';
-  }
-  const response = await fetch(url, {
-    cache: 'no-store',
-    ...options,
-    headers: {
-      ...headers,
-      ...(options?.headers as Record<string, string>),
-    },
-  });
-
-  const body = await response.json();
-
-  if (!response.ok) {
-    const error = body as { error?: { code: string; message: string } };
-    throw new SimulationApiError(
-      error?.error?.code ?? 'UNKNOWN_ERROR',
-      error?.error?.message ?? 'An unexpected error occurred',
-      response.status
-    );
-  }
-
-  return body as T;
 }
 
 export async function startSimulation(params: {
@@ -113,27 +84,27 @@ export async function startSimulation(params: {
   events: number;
   merchantCount?: number;
 }): Promise<SimulationStartResponse> {
-  return request<SimulationStartResponse>('/simulation/run', {
+  return apiRequest<SimulationStartResponse>('/simulation/run', {
     method: 'POST',
     body: JSON.stringify(params),
   });
 }
 
 export async function getSimulationRun(runId: string): Promise<SimulationRun> {
-  return request<SimulationRun>(`/simulation/run/${runId}`);
+  return apiRequest<SimulationRun>(`/simulation/run/${runId}`);
 }
 
 export async function getSimulationAnalytics(runId: string): Promise<SimulationAnalytics> {
-  return request<SimulationAnalytics>(`/simulation/run/${runId}/analytics`);
+  return apiRequest<SimulationAnalytics>(`/simulation/run/${runId}/analytics`);
 }
 
 export async function listSimulationRuns(limit?: number): Promise<SimulationRun[]> {
   const query = limit ? `?limit=${limit}` : '';
-  return request<SimulationRun[]>(`/simulation/runs${query}`);
+  return apiRequest<SimulationRun[]>(`/simulation/runs${query}`);
 }
 
 export async function deleteSimulationRun(runId: string): Promise<{ success: boolean; message: string }> {
-  return request<{ success: boolean; message: string }>(`/simulation/run/${runId}`, {
+  return apiRequest<{ success: boolean; message: string }>(`/simulation/run/${runId}`, {
     method: 'DELETE',
   });
 }
@@ -153,7 +124,7 @@ export async function previewDataset(params: {
   totalPaymentVolume: number;
   failedPaymentVolume: number;
 }> {
-  return request('/simulation/preview', {
+  return apiRequest('/simulation/preview', {
     method: 'POST',
     body: JSON.stringify(params),
   });

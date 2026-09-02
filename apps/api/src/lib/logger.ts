@@ -15,6 +15,10 @@ const REDACT_PATHS = [
   '*.api_key',
   '*.secret',
   '*.authorization',
+  '*.DATABASE_URL',
+  '*.RAZORPAY_KEY_SECRET',
+  '*.AUTH_SESSION_SECRET',
+  '*.AI_API_KEY',
 ];
 
 export function createLoggerOptions(env: Pick<AppEnv, 'NODE_ENV' | 'LOG_LEVEL'>): pino.LoggerOptions {

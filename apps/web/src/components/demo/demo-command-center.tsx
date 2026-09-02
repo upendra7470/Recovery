@@ -223,13 +223,13 @@ export function DemoCommandCenter({
         }
 
         if (idx === stages.length - 1) {
-          // Last stage of this scenario
           addEvent(
             `Scenario "${scenario.scenarioName}" concluded: ${scenario.description}`,
             scenario.recovered ? 'positive' : 'warn'
           );
           if (onComplete) {
-            setTimeout(onComplete, 800);
+            const completionTimer = setTimeout(onComplete, 800);
+            activeTimersRef.current.push(completionTimer);
           }
         }
       }, idx * stageDuration);

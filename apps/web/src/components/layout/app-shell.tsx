@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useState, type ReactNode } from 'react';
+import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { LogoMark } from './logo';
 import { NavIcon } from './nav-icon';
 import { navItems } from './nav-items';
@@ -51,6 +51,69 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
+function MobileSidebar({ onClose }: { onClose: () => void }) {
+  const sidebarRef = useRef<HTMLDivElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    previousFocusRef.current = document.activeElement as HTMLElement;
+    document.body.style.overflow = 'hidden';
+    sidebarRef.current?.focus();
+
+    return () => {
+      document.body.style.overflow = '';
+      previousFocusRef.current?.focus();
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+        return;
+      }
+      if (e.key !== 'Tab' || !sidebarRef.current) return;
+
+      const focusable = sidebarRef.current.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      );
+      if (focusable.length === 0) return;
+
+      const first = focusable[0]!;
+      const last = focusable[focusable.length - 1]!;
+
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-40 lg:hidden">
+      <button
+        type="button"
+        aria-label="Close navigation"
+        onClick={onClose}
+        className="absolute inset-0 bg-slate-900/60"
+      />
+      <aside
+        ref={sidebarRef}
+        tabIndex={-1}
+        className="absolute inset-y-0 left-0 w-64 bg-slate-900 shadow-xl outline-none"
+      >
+        <SidebarContent onNavigate={onClose} />
+      </aside>
+    </div>
+  );
+}
+
 export function AppShell({ children }: { children: ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -89,17 +152,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       </header>
 
       {mobileOpen && (
-        <div className="fixed inset-0 z-40 lg:hidden">
-          <button
-            type="button"
-            aria-label="Close navigation"
-            onClick={() => setMobileOpen(false)}
-            className="absolute inset-0 bg-slate-900/60"
-          />
-          <aside className="absolute inset-y-0 left-0 w-64 bg-slate-900 shadow-xl">
-            <SidebarContent onNavigate={() => setMobileOpen(false)} />
-          </aside>
-        </div>
+        <MobileSidebar onClose={() => setMobileOpen(false)} />
       )}
 
       <main className="lg:pl-64">

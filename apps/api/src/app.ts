@@ -75,6 +75,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     genReqId: () => randomUUID(),
     requestIdHeader: 'x-request-id',
     trustProxy: false,
+    bodyLimit: 1_048_576, // 1 MB
   });
 
   app.decorate('config', env);

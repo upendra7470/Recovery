@@ -49,7 +49,7 @@ export const envSchema = z.object({
   /** Informational provider label persisted with advice (e.g. "openai-compatible"). */
   AI_PROVIDER: emptyToUndefined(z.string().min(1).max(64).optional()),
   AI_MODEL: emptyToUndefined(z.string().min(1).max(128).optional()),
-  AI_API_KEY: emptyToUndefined(z.string().min(1).optional()),
+  AI_API_KEY: emptyToUndefined(z.string().min(8, 'AI_API_KEY must be at least 8 characters').optional()),
   AI_BASE_URL: emptyToUndefined(z.url().optional()),
   AI_TIMEOUT_MS: z.coerce.number().int().min(250).max(60_000).default(5000),
   AI_ADVISOR_VERSION: z.string().regex(/^v\d+$/).default('v1'),
@@ -160,9 +160,12 @@ export class ConfigError extends Error {
   readonly issues: readonly string[];
 
   constructor(issues: readonly string[]) {
-    super(`Invalid environment configuration: ${issues.join('; ')}`);
+    const sanitized = issues.map((issue) =>
+      issue.replace(/postgresql:\/\/[^\s]+/gi, 'postgresql://[REDACTED]').replace(/postgres:\/\/[^\s]+/gi, 'postgres://[REDACTED]')
+    );
+    super(`Invalid environment configuration: ${sanitized.join('; ')}`);
     this.name = 'ConfigError';
-    this.issues = issues;
+    this.issues = sanitized;
   }
 }
 

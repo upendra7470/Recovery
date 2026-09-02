@@ -31,7 +31,7 @@ function seedOpportunity(store: InMemoryRecoveryOpportunityStore, status: string
     merchantId: null,
     paymentAccountId: null,
     type: 'FAILED_PAYMENT',
-    status: status as 'OPEN' | 'RECOVERED' | 'CANCELLED' | 'EXPIRED',
+    status: status as 'OPEN' | 'RECOVERED' | 'DISMISSED' | 'EXPIRED',
     sourceEventId: id ?? `src_sm_${Math.random().toString(36).slice(2)}`,
     providerPaymentId: 'pay_sm_opp',
     providerOrderId: null,
