@@ -1,4 +1,4 @@
-import type { Prisma, PrismaClient } from '@prisma/client';
+import { Prisma, type PrismaClient } from '@prisma/client';
 import type {
   AccountReference,
   PaymentAccountLookupStore,
@@ -192,10 +192,28 @@ export function createPrismaRecoveryOpportunityStore(
       return client.recoveryOpportunity.count({ where: toOpportunityWhere(filters) });
     },
     async markRecovered({ id, recoveryEventId, resolvedAt }) {
-      const row = await client.recoveryOpportunity.update({
-        where: { id },
+      // Guard against double-recovery: only transition OPEN -> RECOVERED.
+      // If already RECOVERED (e.g. duplicate payment.captured event), return
+      // the existing row without overwriting recovery metadata.
+      const result = await client.recoveryOpportunity.updateMany({
+        where: { id, status: 'OPEN' },
         data: { status: 'RECOVERED', recoveryEventId, resolvedAt },
       });
+
+      if (result.count === 0) {
+        // Either the opportunity doesn't exist or it's already been recovered.
+        // Return the current state so callers can detect the no-op.
+        const row = await client.recoveryOpportunity.findUnique({ where: { id } });
+        if (row === null) {
+          throw new Error(`Recovery opportunity ${id} not found`);
+        }
+        return row;
+      }
+
+      const row = await client.recoveryOpportunity.findUnique({ where: { id } });
+      if (row === null) {
+        throw new Error(`Recovery opportunity ${id} not found after update`);
+      }
       return row;
     },
     async summarizeByStatusAndCurrency(merchantId?: string) {
@@ -671,8 +689,32 @@ export function createPrismaMerchantStrategyMemoryStore(
         return toMerchantStrategyMemoryRow(existing);
       }
 
-      const row = await client.merchantStrategyMemory.create({ data });
-      return toMerchantStrategyMemoryRow(row);
+      try {
+        const row = await client.merchantStrategyMemory.create({ data });
+        return toMerchantStrategyMemoryRow(row);
+      } catch (error) {
+        // Race condition: concurrent inserter may have created the row between
+        // our findUnique and create. Catch the unique constraint violation (P2002)
+        // and re-read the winning row.
+        if (
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === 'P2002'
+        ) {
+          const winner = await client.merchantStrategyMemory.findUnique({
+            where: {
+              merchantId_strategy_failureType: {
+                merchantId: data.merchantId,
+                strategy: data.strategy,
+                failureType: data.failureType,
+              },
+            },
+          });
+          if (winner !== null) {
+            return toMerchantStrategyMemoryRow(winner);
+          }
+        }
+        throw error;
+      }
     },
 
     async updateMetrics(id, metrics) {

@@ -350,22 +350,42 @@ export class RecoveryExecutionService {
     pending: RecoveryExecutionRow
   ): Promise<ExecutionRequestResult> {
     requireTransition(pending.status, 'AUTHORIZED');
-    const authorized = await this.executions.updateStatus({
+    const authorized = await this.executions.transitionStatus({
       id: pending.id,
-      status: 'AUTHORIZED',
+      from: 'PENDING',
+      to: 'AUTHORIZED',
       startedAt: new Date(),
     });
 
+    if (authorized === null) {
+      // Another caller already transitioned this execution — replay the existing record
+      const existing = await this.executions.findById(pending.id);
+      if (existing !== null) {
+        return { outcome: 'replayed', execution: existing };
+      }
+      return {
+        outcome: 'blocked',
+        reason: 'OPPORTUNITY_NOT_OPEN',
+        detail: 'Execution was claimed by another concurrent request.',
+        execution: null,
+      };
+    }
+
     if (this.provider === null) {
       requireTransition('AUTHORIZED', 'CANCELLED');
-      const execution = await this.executions.updateStatus({
+      const execution = await this.executions.transitionStatus({
         id: authorized.id,
-        status: 'CANCELLED',
+        from: 'AUTHORIZED',
+        to: 'CANCELLED',
         completedAt: new Date(),
         failureCode: 'PROVIDER_UNAVAILABLE',
         failureReason: 'No recovery execution provider is configured.',
       });
-      return { outcome: 'provider-unavailable', execution, reason: 'not_configured' };
+      return {
+        outcome: 'provider-unavailable',
+        execution: execution ?? authorized,
+        reason: 'not_configured',
+      };
     }
 
     return this.runAuthorizedRetry(assessment, authorized);
