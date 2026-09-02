@@ -21,6 +21,8 @@ import { webhookRoutes } from './routes/webhooks.js';
 import { merchantMemoryRoutes } from './routes/merchant-memory.js';
 import { recoveryModuleRoutes } from './routes/recovery-modules.js';
 import { simulationRoutes } from './routes/simulation.js';
+import { dashboardRoutes } from './routes/dashboard.js';
+import { judgeRoutes } from './routes/judge.js';
 import { RecoveryOpportunityRepository } from './repositories/recovery-opportunity.repository.js';
 import { RecoveryDecisionRepository } from './repositories/recovery-decision.repository.js';
 import { AuthenticationService } from './auth/authentication.service.js';
@@ -30,6 +32,8 @@ import { RecoveryExecutionService } from './services/recovery-execution.service.
 import { RecoveryOperationScheduler } from './services/recovery-operation-scheduler.service.js';
 import { RecoveryOperationsService } from './services/recovery-operations.service.js';
 import { MerchantMemoryService } from './services/merchant-memory.service.js';
+import { DashboardService } from './services/dashboard.service.js';
+import { JudgeModeService } from './services/judge-mode.service.js';
 import { RazorpayRetryAdapter } from './execution/providers/razorpay-retry.adapter.js';
 import { DemoRetryAdapter } from './execution/providers/demo-retry.adapter.js';
 import { DemoAIAdvisor } from './ai/providers/demo-ai.adapter.js';
@@ -207,6 +211,31 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const merchantMemoryService = new MerchantMemoryService(db.merchantStrategyMemory);
   app.decorate('merchantMemoryService', merchantMemoryService);
 
+  // Phase 14: Merchant Dashboard — read-only aggregation layer
+  app.decorate(
+    'dashboardService',
+    new DashboardService(
+      app.opportunities,
+      executionRepository,
+      decisionService,
+      app.operationsService,
+      merchantMemoryService
+    )
+  );
+
+  // Phase 15: Judge Mode — scenario orchestration over existing simulation infrastructure
+  app.decorate(
+    'judgeModeService',
+    new JudgeModeService(
+      db,
+      leakageService,
+      decisionService,
+      app.executionService,
+      app.aiAdvisorService,
+      merchantMemoryService
+    )
+  );
+
   app.addHook('onRequest', async (request, reply) => {
     void reply.header('x-request-id', request.id);
   });
@@ -241,6 +270,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(merchantMemoryRoutes);
   await app.register(recoveryModuleRoutes);
   await app.register(simulationRoutes);
+  await app.register(dashboardRoutes);
+  await app.register(judgeRoutes);
 
   app.addHook('onClose', async () => {
     await closeDatabase();

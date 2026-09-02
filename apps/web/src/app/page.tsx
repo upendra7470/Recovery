@@ -6,315 +6,293 @@ import { SectionCard } from '@/components/ui/section-card';
 import { StatCard } from '@/components/ui/stat-card';
 import { SystemStatusPill } from '@/components/ui/system-status-pill';
 import { getApiHealth } from '@/lib/api/status';
-import { getDemoStatus } from '@/lib/api/demo';
-import { getOperationsExecutions } from '@/lib/api/recovery-operations';
-import {
-  getDecisionsOverview,
-  getOpportunityOverview,
-  type CurrencyBreakdown,
-} from '@/lib/api/opportunities';
+import { getDashboardOverview } from '@/lib/api/dashboard';
 import { formatMinorAmount, formatPercent } from '@/lib/format';
 
 export const dynamic = 'force-dynamic';
 
 export const metadata: Metadata = {
-  title: 'Overview — RecoveryOS',
+  title: 'Merchant Dashboard — RecoveryOS',
 };
 
-/** Sums a per-currency breakdown; INR is the primary ledger for display. */
-function primaryCurrencyTotals(currencies: CurrencyBreakdown[]): {
-  atRisk: number;
-  recovered: number;
-  extraCurrencies: string[];
-} {
-  const primary = currencies.find((entry) => entry.currency === 'INR');
-  const extras = currencies
-    .filter((entry) => entry.currency !== 'INR')
-    .map((entry) => entry.currency);
-  return {
-    atRisk: primary?.revenueAtRisk ?? 0,
-    recovered: primary?.recoveredAmount ?? 0,
-    extraCurrencies: extras,
-  };
+const MERCHANT_ID = '00000000-0000-4000-8000-000000000099';
+
+function StatusBadge({ status }: { status: string }) {
+  const color =
+    status === 'SUCCEEDED'
+      ? 'bg-emerald-100 text-emerald-800'
+      : status === 'FAILED'
+        ? 'bg-rose-100 text-rose-800'
+        : status === 'BLOCKED'
+          ? 'bg-amber-100 text-amber-800'
+          : status === 'RECOVERED'
+            ? 'bg-emerald-100 text-emerald-800'
+            : 'bg-slate-100 text-slate-700';
+  return (
+    <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${color}`}>
+      {status}
+    </span>
+  );
 }
 
-export default async function OverviewPage() {
-  const [apiHealth, overview, decisions, operations, demoStatus] = await Promise.all([
+export default async function MerchantDashboardPage() {
+  const [apiHealth, dashboard] = await Promise.all([
     getApiHealth(),
-    getOpportunityOverview(),
-    getDecisionsOverview(),
-    getOperationsExecutions({ limit: 5 }),
-    getDemoStatus().catch(() => null),
+    getDashboardOverview(MERCHANT_ID).catch(() => null),
   ]);
 
-  const totals =
-    overview !== null
-      ? primaryCurrencyTotals(overview.currencies)
-      : { atRisk: 0, recovered: 0, extraCurrencies: [] };
-  const closedTotal = totals.atRisk + totals.recovered;
-  const recoveryRate = closedTotal > 0 ? (totals.recovered / closedTotal) * 100 : 0;
-  const liveData = overview !== null;
+  const connected = apiHealth.online;
+  const hasData = dashboard?.hasData ?? false;
 
   return (
     <>
       <PageHeader
-        title="Overview"
-        description="A real-time view of revenue exposure, recovery performance and payment health."
-        meta={<SystemStatusPill connected={apiHealth.online} />}
+        title="Merchant Dashboard"
+        description="Revenue recovery intelligence — real-time exposure, recovery performance and safety compliance."
+        meta={<SystemStatusPill connected={connected} />}
       />
 
-      {/* Live Demo Quick Launcher Banner */}
-      <div className="mb-6 rounded-xl border border-indigo-200 bg-gradient-to-r from-indigo-900 via-indigo-950 to-slate-900 p-4 text-white shadow-md">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="h-2 w-2 rounded-full bg-emerald-400 animate-ping" />
-              <span className="font-mono text-xs uppercase tracking-wider text-indigo-300 font-semibold">
-                Live Demo Command Center Ready
-              </span>
-            </div>
-            <p className="mt-1 text-sm font-medium text-slate-100">
-              Run interactive synthetic recovery scenarios with end-to-end telemetry and verification.
-            </p>
-          </div>
-          <Link
-            href="/demo"
-            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-indigo-500 px-4 py-2 text-xs font-bold text-white shadow transition-all hover:bg-indigo-400"
-          >
-            Launch Command Center →
-          </Link>
-        </div>
-      </div>
-
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          label="Revenue at Risk"
-          value={formatMinorAmount(totals.atRisk, 'INR')}
-          hint={
-            !liveData
-              ? 'Detection service unreachable.'
-              : `${overview.openOpportunities} open opportunit${overview.openOpportunities === 1 ? 'y' : 'ies'} detected.`
-          }
-          tone="risk"
-        />
-        <StatCard
-          label="Recoverable Revenue"
-          value={formatMinorAmount(totals.atRisk, 'INR')}
-          hint={
-            !liveData
-              ? 'Detection service unreachable.'
-              : `Across ${overview.failedPayments} failed payment${overview.failedPayments === 1 ? '' : 's'}.`
-          }
-        />
-        <StatCard
-          label="Recovered Revenue"
-          value={formatMinorAmount(totals.recovered, 'INR')}
-          tone="positive"
-          hint={
-            !liveData
-              ? 'Detection service unreachable.'
-              : 'Verified against captured payment events.'
-          }
-        />
-        <StatCard
-          label="Recovery Rate"
-          value={formatPercent(recoveryRate)}
-          hint={
-            !liveData || closedTotal === 0
-              ? 'Measured once recovery outcomes exist.'
-              : 'Recovered share of resolved opportunities.'
-          }
-        />
-      </div>
-
-      {totals.extraCurrencies.length > 0 && (
-        <p className="mt-3 text-xs text-slate-500">
-          Additional currencies detected:{' '}
-          {totals.extraCurrencies.map((currency) => {
-            const entry = overview?.currencies.find((c) => c.currency === currency);
-            return `${currency} ${formatMinorAmount(entry?.revenueAtRisk ?? 0, currency)}`;
-          }).join(', ')}
-          . Totals above show INR only.
-        </p>
-      )}
-
-      <div className="mt-6">
-        <SectionCard
-          title="Decision Engine Signals"
-          subtitle={
-            decisions
-              ? `Deterministic assessments · engine ${decisions.engineVersion}`
-              : 'Decision engine'
-          }
-        >
-          {decisions === null ? (
-            <EmptyState
-              title="Decision engine unreachable."
-              message="Could not load decision metrics from the API. Verify the service is running and try again."
-            />
-          ) : decisions.averageConfidence === null &&
-            decisions.criticalOpportunities === 0 &&
-            decisions.highPriorityOpportunities === 0 &&
-            decisions.recommendedRetries === 0 &&
-            decisions.reviewRequired === 0 ? (
-            <EmptyState
-              title="No decisions evaluated yet."
-              message="Decisions appear when recovery cases are assessed. Run a demo scenario or ingest payment events to trigger evaluation."
-            />
-          ) : (
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-              <StatCard
-                label="Critical Priority"
-                value={String(decisions.criticalOpportunities)}
-                tone="risk"
-                hint="Score 80–100 opportunities."
-              />
-              <StatCard
-                label="High Priority"
-                value={String(decisions.highPriorityOpportunities)}
-                hint="Score 60–79 opportunities."
-              />
-              <StatCard
-                label="Recommended Retries"
-                value={String(decisions.recommendedRetries)}
-                tone="positive"
-                hint={`${decisions.reviewRequired} case${decisions.reviewRequired === 1 ? '' : 's'} flagged for review instead.`}
-              />
-              <StatCard
-                label="Avg Confidence"
-                value={
-                  decisions.averageConfidence !== null
-                    ? formatPercent(decisions.averageConfidence)
-                    : '—'
-                }
-                hint="Evidence quality across stored decisions."
-              />
-            </div>
-          )}
-          <p className="mt-4 text-xs text-slate-500">
-            Governed by deterministic safety guardrails.{' '}
-            <Link href="/recovery-cases" className="text-indigo-600 hover:underline">
-              View all recovery cases
+      {!hasData ? (
+        <div className="space-y-6">
+          <EmptyState
+            title="No recovery data yet."
+            message="Run a demo scenario or ingest payment events to populate the dashboard with live metrics."
+          />
+          <div className="flex justify-center gap-3">
+            <Link
+              href="/demo"
+              className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
+            >
+              Launch Demo Scenario
             </Link>
-            .
-          </p>
-        </SectionCard>
-      </div>
-
-      <div className="mt-6 grid gap-6 lg:grid-cols-2">
-        <SectionCard
-          title="Recent Recovery Activity"
-          subtitle="Executed and verified recovery actions"
-        >
-          {operations === null || operations.executions.length === 0 ? (
-            <EmptyState
-              title="No recovery executions yet."
-              message="Executions appear here once automated or demo recovery operations run."
+            <Link
+              href="/simulation"
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Run Simulation
+            </Link>
+          </div>
+        </div>
+      ) : (
+        <>
+          {/* Revenue Overview — Primary KPIs */}
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <StatCard
+              label="Revenue at Risk"
+              value={formatMinorAmount(dashboard!.revenue.atRisk, 'INR')}
+              hint={`${dashboard!.recovery.opportunities} open opportunit${dashboard!.recovery.opportunities === 1 ? 'y' : 'ies'} detected.`}
+              tone="risk"
             />
-          ) : (
-            <div className="space-y-2.5">
-              {operations.executions.slice(0, 4).map((exec) => (
-                <div
-                  key={exec.id}
-                  className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50/70 p-2.5 text-xs"
-                >
+            <StatCard
+              label="Recoverable Revenue"
+              value={formatMinorAmount(dashboard!.revenue.recoverable, 'INR')}
+              hint="Conservative estimate of open opportunity amounts."
+            />
+            <StatCard
+              label="Recovered Revenue"
+              value={formatMinorAmount(dashboard!.revenue.recovered, 'INR')}
+              tone="positive"
+              hint="Verified against captured payment events."
+            />
+            <StatCard
+              label="Recovery Rate"
+              value={formatPercent(dashboard!.revenue.recoveryRate * 100)}
+              hint={
+                dashboard!.revenue.recoverable === 0
+                  ? 'Measured once recovery outcomes exist.'
+                  : 'Recovered share of recoverable revenue.'
+              }
+            />
+          </div>
+
+          {/* Recovery Pipeline & Safety */}
+          <div className="mt-6 grid gap-6 lg:grid-cols-2">
+            <SectionCard
+              title="Recovery Pipeline"
+              subtitle="Execution pipeline status and outcomes"
+            >
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-lg border border-slate-100 bg-slate-50 p-3">
+                  <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400">Total Executions</p>
+                  <p className="mt-1 text-2xl font-semibold text-slate-900">{dashboard!.recovery.executionsAttempted}</p>
+                </div>
+                <div className="rounded-lg border border-slate-100 bg-slate-50 p-3">
+                  <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400">Pending</p>
+                  <p className="mt-1 text-2xl font-semibold text-amber-600">{dashboard!.recovery.pending}</p>
+                </div>
+                <div className="rounded-lg border border-emerald-100 bg-emerald-50 p-3">
+                  <p className="text-[10px] font-medium uppercase tracking-wide text-emerald-600">Succeeded</p>
+                  <p className="mt-1 text-2xl font-semibold text-emerald-700">{dashboard!.recovery.succeeded}</p>
+                </div>
+                <div className="rounded-lg border border-rose-100 bg-rose-50 p-3">
+                  <p className="text-[10px] font-medium uppercase tracking-wide text-rose-600">Failed</p>
+                  <p className="mt-1 text-2xl font-semibold text-rose-700">{dashboard!.recovery.failed}</p>
+                </div>
+              </div>
+              <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
+                <span>
+                  <strong className="text-slate-800">{dashboard!.recovery.verified}</strong> opportunit{dashboard!.recovery.verified === 1 ? 'y' : 'ies'} verified recovered
+                </span>
+                <Link href="/recovery-cases" className="font-medium text-indigo-600 hover:underline">
+                  View all →
+                </Link>
+              </div>
+            </SectionCard>
+
+            <SectionCard
+              title="Safety & Compliance"
+              subtitle="Safety gate enforcement and human review"
+            >
+              <div className="space-y-3">
+                <div className="flex items-center justify-between rounded-lg border border-emerald-100 bg-emerald-50/60 p-3">
                   <div className="flex items-center gap-2">
-                    <span
-                      className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                        exec.status === 'SUCCEEDED'
-                          ? 'bg-emerald-100 text-emerald-800'
-                          : exec.status === 'BLOCKED'
-                            ? 'bg-amber-100 text-amber-800'
-                            : 'bg-slate-100 text-slate-700'
-                      }`}
-                    >
-                      {exec.status}
-                    </span>
-                    <span className="font-medium text-slate-800">{exec.action}</span>
-                    <span className="text-slate-400">· attempt #{exec.attempt}</span>
+                    <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
+                    <div>
+                      <p className="text-xs font-bold text-emerald-950">Safety Gate Active</p>
+                      <p className="text-[11px] text-emerald-700">All executions authorized through policy checks</p>
+                    </div>
                   </div>
-                  <span className="font-mono text-[11px] text-indigo-700">
-                    {exec.id.slice(0, 8)}...
+                  <span className="rounded bg-emerald-200/60 px-2 py-0.5 text-[10px] font-bold text-emerald-900">
+                    {dashboard!.safety.approved} APPROVED
                   </span>
                 </div>
-              ))}
-              <div className="pt-1 text-right">
-                <Link href="/operations" className="text-xs font-medium text-indigo-600 hover:underline">
-                  View full operations feed →
-                </Link>
-              </div>
-            </div>
-          )}
-        </SectionCard>
 
-        <SectionCard
-          title="Payment Health"
-          subtitle="Provider connectivity & failure signals"
-        >
-          {demoStatus?.enabled ? (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between rounded-lg border border-emerald-200 bg-emerald-50/60 p-3">
-                <div className="flex items-center gap-2">
-                  <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
-                  <div>
-                    <p className="text-xs font-bold text-emerald-950">DEMO RAZORPAY ACCOUNT</p>
-                    <p className="text-[11px] text-emerald-700">Synthetic account · Test environment</p>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="rounded border border-slate-100 bg-slate-50 p-2">
+                    <span className="text-[10px] text-slate-400 block">Blocked by Policy</span>
+                    <strong className="text-sm text-amber-700 font-mono">{dashboard!.safety.blocked}</strong>
+                  </div>
+                  <div className="rounded border border-slate-100 bg-slate-50 p-2">
+                    <span className="text-[10px] text-slate-400 block">Human Review Required</span>
+                    <strong className="text-sm text-indigo-700 font-mono">{dashboard!.safety.humanReview}</strong>
                   </div>
                 </div>
-                <span className="rounded bg-emerald-200/60 px-2 py-0.5 text-[10px] font-bold text-emerald-900">
-                  HEALTHY
-                </span>
               </div>
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div className="rounded border border-slate-100 bg-slate-50 p-2 text-slate-600">
-                  <span className="text-[10px] text-slate-400 block">Synthetic Ingested</span>
-                  <strong className="text-sm text-slate-900 font-mono">
-                    {demoStatus.counts.paymentEvents} events
-                  </strong>
+              <p className="mt-3 text-xs text-slate-500">
+                Governed by deterministic safety guardrails.{' '}
+                <Link href="/ai-decisions" className="text-indigo-600 hover:underline">
+                  View decision log
+                </Link>
+                .
+              </p>
+            </SectionCard>
+          </div>
+
+          {/* Payment Health & Activity Feed */}
+          <div className="mt-6 grid gap-6 lg:grid-cols-2">
+            <SectionCard
+              title="Payment Health"
+              subtitle="Payment event outcomes from opportunity data"
+            >
+              <div className="space-y-3">
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div className="rounded border border-slate-100 bg-slate-50 p-2 text-center">
+                    <span className="text-[10px] text-slate-400 block">Total Events</span>
+                    <strong className="text-sm text-slate-900 font-mono">{dashboard!.payments.total}</strong>
+                  </div>
+                  <div className="rounded border border-emerald-100 bg-emerald-50 p-2 text-center">
+                    <span className="text-[10px] text-emerald-600 block">Successful</span>
+                    <strong className="text-sm text-emerald-700 font-mono">{dashboard!.payments.successful}</strong>
+                  </div>
+                  <div className="rounded border border-rose-100 bg-rose-50 p-2 text-center">
+                    <span className="text-[10px] text-rose-600 block">Failed</span>
+                    <strong className="text-sm text-rose-700 font-mono">{dashboard!.payments.failed}</strong>
+                  </div>
                 </div>
-                <div className="rounded border border-slate-100 bg-slate-50 p-2 text-slate-600">
-                  <span className="text-[10px] text-slate-400 block">Recovered</span>
-                  <strong className="text-sm text-emerald-700 font-mono">
-                    {formatMinorAmount(demoStatus.metrics.recoveredRevenue, 'INR')}
-                  </strong>
+                <div className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50 p-3">
+                  <span className="text-xs text-slate-600">Success Rate</span>
+                  <span className="text-sm font-semibold text-slate-900">
+                    {formatPercent(dashboard!.payments.successRate * 100)}
+                  </span>
                 </div>
               </div>
-              <div className="pt-1 text-right">
+              <div className="pt-2 text-right">
                 <Link href="/payment-health" className="text-xs font-medium text-indigo-600 hover:underline">
-                  View payment health dashboard →
+                  View payment health →
                 </Link>
               </div>
-            </div>
-          ) : (
-            <EmptyState
-              title="No payment accounts configured."
-              message="Connect a payment account or enable Demo Mode to stream payment health signals."
-            />
-          )}
-        </SectionCard>
-      </div>
+            </SectionCard>
 
-      <div className="mt-6">
-        <SectionCard title="AI Recovery Status" subtitle="Recovery intelligence & safety policy engine">
-          <div className="rounded-xl border border-indigo-100 bg-indigo-50/60 p-4 text-sm leading-relaxed text-indigo-950">
-            <div className="flex items-center gap-2 font-semibold text-indigo-900">
-              <span className="h-2 w-2 rounded-full bg-indigo-600" />
-              AI Recovery Intelligence Active (Phase 11.2)
-            </div>
-            <p className="mt-1 text-xs text-indigo-900/80">
-              Deterministic decision engine is coupled with explainable AI advisory intelligence. Every recovery recommendation undergoes rigorous 5-point safety policy checks before execution authorization.
-            </p>
-            <div className="mt-3 flex gap-3 text-xs font-medium">
-              <Link href="/ai-decisions" className="text-indigo-700 hover:underline">
-                View AI Decision Log →
-              </Link>
-              <Link href="/demo" className="text-indigo-700 hover:underline">
-                Test in Live Demo →
-              </Link>
-            </div>
+            <SectionCard
+              title="Recent Activity"
+              subtitle="Latest recoveries and opportunity detections"
+            >
+              {dashboard!.recentActivity.length === 0 ? (
+                <EmptyState
+                  title="No recent activity."
+                  message="Activity appears as recovery operations run."
+                />
+              ) : (
+                <div className="space-y-2">
+                  {dashboard!.recentActivity.slice(0, 6).map((item) => (
+                    <div
+                      key={item.id}
+                      className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50/70 p-2.5 text-xs"
+                    >
+                      <div className="flex items-center gap-2">
+                        <StatusBadge status={item.status} />
+                        <span className="font-medium text-slate-800">{item.action}</span>
+                        {item.amount !== null && item.currency !== null && (
+                          <span className="text-slate-400 font-mono text-[11px]">
+                            {formatMinorAmount(item.amount, item.currency)}
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-[10px] text-slate-400">
+                        {new Date(item.timestamp).toLocaleDateString('en-IN', {
+                          month: 'short',
+                          day: 'numeric',
+                        })}
+                      </span>
+                    </div>
+                  ))}
+                  <div className="pt-1 text-right">
+                    <Link href="/operations" className="text-xs font-medium text-indigo-600 hover:underline">
+                      View full operations feed →
+                    </Link>
+                  </div>
+                </div>
+              )}
+            </SectionCard>
           </div>
-        </SectionCard>
-      </div>
+
+          {/* Quick Links */}
+          <div className="mt-6">
+            <SectionCard title="Quick Actions" subtitle="Navigate to specialized dashboards">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <Link
+                  href="/recovery-cases"
+                  className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-3 text-sm font-medium text-slate-700 transition-colors hover:border-indigo-200 hover:bg-indigo-50"
+                >
+                  <span className="text-lg">🔍</span>
+                  Recovery Cases
+                </Link>
+                <Link
+                  href="/ai-decisions"
+                  className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-3 text-sm font-medium text-slate-700 transition-colors hover:border-indigo-200 hover:bg-indigo-50"
+                >
+                  <span className="text-lg">🧠</span>
+                  AI Decisions
+                </Link>
+                <Link
+                  href="/merchant-memory"
+                  className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-3 text-sm font-medium text-slate-700 transition-colors hover:border-indigo-200 hover:bg-indigo-50"
+                >
+                  <span className="text-lg">📊</span>
+                  Merchant Memory
+                </Link>
+                <Link
+                  href="/recovery-modules"
+                  className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-3 text-sm font-medium text-slate-700 transition-colors hover:border-indigo-200 hover:bg-indigo-50"
+                >
+                  <span className="text-lg">⚙️</span>
+                  Recovery Modules
+                </Link>
+              </div>
+            </SectionCard>
+          </div>
+        </>
+      )}
     </>
   );
 }

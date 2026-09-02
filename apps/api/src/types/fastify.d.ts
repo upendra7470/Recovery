@@ -8,6 +8,8 @@ import type { RecoveryExecutionService } from '../services/recovery-execution.se
 import type { RecoveryOperationsService } from '../services/recovery-operations.service.js';
 import type { RevenueLeakageService } from '../services/revenue-leakage.service.js';
 import type { MerchantMemoryService } from '../services/merchant-memory.service.js';
+import type { DashboardService } from '../services/dashboard.service.js';
+import type { JudgeModeService } from '../services/judge-mode.service.js';
 import type { FastifyRequest } from 'fastify';
 
 declare module 'fastify' {
@@ -30,6 +32,10 @@ declare module 'fastify' {
     leakageService: RevenueLeakageService;
     /** Adaptive merchant memory service (Phase 11). */
     merchantMemoryService: MerchantMemoryService;
+    /** Merchant dashboard aggregation service (Phase 14). */
+    dashboardService: DashboardService;
+    /** Judge mode scenario orchestration service (Phase 15). */
+    judgeModeService: JudgeModeService;
   }
 
   interface FastifyRequest {
