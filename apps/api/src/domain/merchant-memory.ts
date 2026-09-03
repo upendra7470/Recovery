@@ -1,5 +1,5 @@
 /**
- * Merchant Memory (Phase 11) — Adaptive Merchant Memory subsystem.
+ *  * Merchant Memory (Phase 11) — Adaptive Merchant Memory subsystem.
  *
  * Evidence-based, deterministic merchant-specific historical recovery data.
  * Memory is derived from actual recovery outcomes stored in PostgreSQL.
