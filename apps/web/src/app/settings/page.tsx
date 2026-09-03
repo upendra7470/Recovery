@@ -21,8 +21,6 @@ export default function SettingsPage() {
           <dl className="grid gap-x-8 gap-y-3 text-sm sm:grid-cols-[200px_1fr]">
             <dt className="text-slate-500">Product</dt>
             <dd className="font-medium text-slate-900">RecoveryOS</dd>
-            <dt className="text-slate-500">Stage</dt>
-            <dd className="font-medium text-slate-900">Phase 11 · Demo Mode</dd>
             <dt className="text-slate-500">Configuration</dt>
             <dd className="text-slate-700">
               Managed via environment variables. See{' '}
