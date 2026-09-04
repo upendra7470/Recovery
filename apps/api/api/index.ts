@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-misused-promises */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { FastifyInstance } from 'fastify';
+import type { HTTPMethods } from 'fastify';
 
 let cachedApp: FastifyInstance | null = null;
 
@@ -16,7 +17,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   const app = await getApp();
 
   const url = req.url ?? '/';
-  const method = req.method ?? 'GET';
+  const method = (req.method ?? 'GET') as HTTPMethods;
 
   const body = await new Promise<Buffer>((resolve) => {
     const chunks: Buffer[] = [];
@@ -31,6 +32,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     payload: body.length > 0 ? body : undefined,
   });
 
-  res.writeHead(response.statusCode, response.headers);
-  res.end(response.payload);
+  const { statusCode, headers, payload } = response;
+  res.writeHead(statusCode, headers as Record<string, string>);
+  res.end(payload);
 }

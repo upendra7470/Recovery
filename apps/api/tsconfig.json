@@ -5,5 +5,5 @@
     "sourceMap": true,
     "outDir": "dist"
   },
-  "include": ["src", "api", "test", "vitest.config.ts"]
+  "include": ["src", "test", "vitest.config.ts"]
 }
