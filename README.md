@@ -670,6 +670,14 @@ RecoveryOS demonstrates how AI can be used responsibly in financial systems — 
 
 ---
 
+Few working screenshots of the Application 
+
+<img width="1166" height="740" alt="Screenshot 2026-09-04 at 21 10 49" src="https://github.com/user-attachments/assets/332878f9-96d4-4405-982d-ba6f47f58576" />
+<img width="1169" height="745" alt="Screenshot 2026-09-04 at 21 11 04" src="https://github.com/user-attachments/assets/02cc9db9-f9b9-42c2-a257-db552d111dc8" />
+<img width="1166" height="738" alt="Screenshot 2026-09-04 at 21 13 29" src="https://github.com/user-attachments/assets/bdd9050a-571f-41ea-8702-14a1fb595fc5" />
+<img width="1170" height="712" alt="Screenshot 2026-09-04 at 21 13 44" src="https://github.com/user-attachments/assets/55f68668-81bc-4a60-9b35-29b980837081" />
+<img width="1170" height="739" alt="Screenshot 2026-09-04 at 21 13 55" src="https://github.com/user-attachments/assets/df61e84b-9917-41ef-b8c6-45f054080389" />
+
 ## License
 
 Private — All rights reserved.
