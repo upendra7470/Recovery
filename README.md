@@ -134,14 +134,6 @@ npm run dev
 
 **API:** http://localhost:4000 · **Web:** http://localhost:3000
 
-### Run the demo
-
-1. Open **http://localhost:3000/judge**
-2. Select **Payment Failure Storm**
-3. Set **Seed:** `42`, **Events:** `200`, **Merchants:** `5`
-4. Click **Start Scenario**
-5. Watch progress and live metrics
-
 ### What to observe
 
 | Stage | What you see |
