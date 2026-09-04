@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { ValidationError } from '../lib/errors.js';
 import { SeededRandom } from './seeded-random.js';
 import type {
   SyntheticCustomer,
@@ -117,10 +118,10 @@ const CUSTOMER_LAST_NAMES = [
  */
 export function generateDataset(config: SyntheticDatasetConfig): SyntheticDataset {
   if (!validateDistribution(config.distribution)) {
-    throw new Error('Invalid failure distribution: rates must sum to <= 1.0');
+    throw new ValidationError('Invalid failure distribution: rates must sum to <= 1.0');
   }
   if (!validatePaymentMethods(config.paymentMethodDistribution)) {
-    throw new Error('Invalid payment method distribution: rates must sum to ~1.0');
+    throw new ValidationError('Invalid payment method distribution: rates must sum to ~1.0');
   }
 
   const rng = new SeededRandom(config.seed);

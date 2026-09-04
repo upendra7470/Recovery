@@ -1,3 +1,5 @@
+import { ValidationError } from '../lib/errors.js';
+
 /**
  * Deterministic pseudo-random number generator (mulberry32).
  *
@@ -38,7 +40,7 @@ export class SeededRandom {
   /** Pick a random element weighted by probabilities (must sum to 1). */
   pickWeighted<T>(items: readonly T[], weights: readonly number[]): T {
     if (items.length !== weights.length) {
-      throw new Error('items and weights must have the same length');
+      throw new ValidationError('items and weights must have the same length');
     }
     const r = this.next();
     let cumulative = 0;

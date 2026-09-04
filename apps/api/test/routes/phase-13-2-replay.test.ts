@@ -573,7 +573,7 @@ describe('Phase 13.2 — Synthetic Event Replay Engine', () => {
           datasetRunId: 'empty_run',
           speed: 'instant',
         })
-      ).rejects.toThrow('No events found');
+      ).rejects.toThrow('Dataset empty_run not found.');
     });
   });
 
@@ -605,7 +605,7 @@ describe('Phase 13.2 — Synthetic Event Replay Engine', () => {
           datasetRunId: 'empty_run',
           speed: 'instant',
         })
-      ).rejects.toThrow('No events found');
+      ).rejects.toThrow('Dataset empty_run not found.');
     });
   });
 

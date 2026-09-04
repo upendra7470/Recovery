@@ -153,6 +153,106 @@ export const MALFORMED_PAYMENT_ENTITY_NOT_OBJECT = {
   },
 };
 
+/** Minimal payment payload — only required fields, no optional fields. */
+export const PAYMENT_MINIMAL_PAYLOAD = {
+  event: 'payment.authorized',
+  created_at: 1690000000,
+  payload: {
+    payment: {
+      id: 'pay_MINimal123',
+      entity: 'payment',
+      amount: 10000,
+      currency: 'INR',
+      status: 'authorized',
+    },
+  },
+};
+
+/** Zero-amount payment edge case — triggers zero-amount detection. */
+export const PAYMENT_ZERO_AMOUNT_PAYLOAD = {
+  event: 'payment.failed',
+  account_id: 'acc_123456',
+  created_at: 1690000000,
+  payload: {
+    payment: {
+      id: 'pay_ZERO00000',
+      entity: 'payment',
+      amount: 0,
+      currency: 'INR',
+      status: 'failed',
+      method: 'upi',
+      created_at: 1690000000,
+      error_code: 'PAYMENT_FAILED',
+      error_description: 'Zero amount not allowed',
+      error_source: 'customer',
+      error_step: 'payment_authorization',
+      error_reason: 'invalid_amount',
+    },
+  },
+};
+
+/** Negative-amount payment edge case — provider data anomaly. */
+export const PAYMENT_NEGATIVE_AMOUNT_PAYLOAD = {
+  event: 'payment.failed',
+  account_id: 'acc_123456',
+  created_at: 1690000000,
+  payload: {
+    payment: {
+      id: 'pay_NEGATIVE123',
+      entity: 'payment',
+      amount: -5000,
+      currency: 'INR',
+      status: 'failed',
+      method: 'card',
+      created_at: 1690000000,
+      error_code: 'PAYMENT_FAILED',
+      error_description: 'Invalid amount',
+      error_source: 'provider',
+      error_step: 'payment_authorization',
+      error_reason: 'invalid_amount',
+    },
+  },
+};
+
+/** Payment missing required id field — should fail validation. */
+export const PAYMENT_MISSING_ID_PAYLOAD = {
+  event: 'payment.failed',
+  account_id: 'acc_123456',
+  created_at: 1690000000,
+  payload: {
+    payment: {
+      entity: 'payment',
+      amount: 10000,
+      currency: 'INR',
+      status: 'failed',
+      created_at: 1690000000,
+    },
+  },
+};
+
+/** Future-timestamp payment edge case. */
+export const PAYMENT_FUTURE_TIMESTAMP_PAYLOAD = {
+  event: 'payment.failed',
+  account_id: 'acc_123456',
+  created_at: 4102444800,
+  payload: {
+    payment: {
+      id: 'pay_FUTURE123',
+      entity: 'payment',
+      amount: 10000,
+      currency: 'INR',
+      status: 'failed',
+      method: 'card',
+      created_at: 4102444800,
+      error_code: 'PAYMENT_FAILED',
+      error_description: 'Future timestamp detected',
+      error_source: 'customer',
+      error_step: 'payment_authorization',
+      error_reason: 'invalid_request',
+    },
+  },
+};
+
 export function generateSignature(secret: string, body: string): string {
   return createHmac('sha256', secret).update(body).digest('hex');
 }

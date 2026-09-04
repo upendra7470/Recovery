@@ -55,6 +55,21 @@ export class InternalError extends AppError {
   }
 }
 
+export class ProviderError extends AppError {
+  readonly provider: string;
+  readonly retryable: boolean;
+
+  constructor(
+    provider: string,
+    message: string,
+    options?: { retryable?: boolean; cause?: unknown }
+  ) {
+    super(502, 'PROVIDER_ERROR', message, { cause: options?.cause });
+    this.provider = provider;
+    this.retryable = options?.retryable ?? false;
+  }
+}
+
 export function isAppError(error: unknown): error is AppError {
   return error instanceof AppError;
 }

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Prisma } from '@prisma/client';
 import type { AppDatabase } from '../lib/database.js';
+import { ConflictError, ValidationError } from '../lib/errors.js';
 import type { RevenueLeakageService } from './revenue-leakage.service.js';
 import type { RecoveryDecisionService } from './recovery-decision.service.js';
 import type { RecoveryAIAdvisorService } from './recovery-ai-advisor.service.js';
@@ -241,11 +242,11 @@ export class DemoService {
 
   async runDemo(scenarioKey?: 'successful' | 'unsafe' | 'review' | 'all'): Promise<DemoRunResult> {
     if (!this.enabled) {
-      throw new Error('Demo mode is not enabled. Set DEMO_MODE_ENABLED=true to enable.');
+      throw new ValidationError('Demo mode is not enabled. Set DEMO_MODE_ENABLED=true to enable.');
     }
 
     if (DemoService.isExecuting) {
-      throw new Error('A demo scenario run is already in progress. Please wait for it to complete.');
+      throw new ConflictError('A demo scenario run is already in progress. Please wait for it to complete.');
     }
 
     DemoService.isExecuting = true;
@@ -301,7 +302,7 @@ export class DemoService {
 
   async reset(): Promise<{ deleted: number }> {
     if (!this.enabled) {
-      throw new Error('Demo mode is not enabled. Set DEMO_MODE_ENABLED=true to enable.');
+      throw new ValidationError('Demo mode is not enabled. Set DEMO_MODE_ENABLED=true to enable.');
     }
     return this.resetInternal();
   }
@@ -1141,7 +1142,7 @@ export class DemoService {
 
   async runModuleScenario(moduleScenario: ModuleScenarioType): Promise<ModuleScenarioResult> {
     if (!this.enabled) {
-      throw new Error('Demo mode is not enabled. Set DEMO_MODE_ENABLED=true to enable.');
+      throw new ValidationError('Demo mode is not enabled. Set DEMO_MODE_ENABLED=true to enable.');
     }
 
     await this.ensureDemoInfrastructure();

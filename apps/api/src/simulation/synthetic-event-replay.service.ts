@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { AppDatabase } from '../lib/database.js';
+import { ConflictError, NotFoundError, ValidationError } from '../lib/errors.js';
 import type { RevenueLeakageService } from '../services/revenue-leakage.service.js';
 import type { RecoveryDecisionService } from '../services/recovery-decision.service.js';
 import type { RecoveryExecutionService } from '../services/recovery-execution.service.js';
@@ -71,11 +72,11 @@ export class SyntheticEventReplayService {
    */
   async startReplay(request: StartReplayRequest): Promise<StartReplayResponse> {
     if (!this.enabled) {
-      throw new Error('Simulation mode is not enabled. Set DEMO_MODE_ENABLED=true to enable.');
+      throw new ValidationError('Simulation mode is not enabled. Set DEMO_MODE_ENABLED=true to enable.');
     }
 
     if (isReplaying) {
-      throw new Error('A replay is already in progress. Please wait for it to complete.');
+      throw new ConflictError('A replay is already in progress. Please wait for it to complete.');
     }
 
     // Validate dataset exists by checking for events with the run prefix
@@ -85,7 +86,7 @@ export class SyntheticEventReplayService {
     });
 
     if (!events || events.length === 0) {
-      throw new Error(`No events found for dataset run: ${request.datasetRunId}`);
+      throw new NotFoundError(`Dataset ${request.datasetRunId}`);
     }
 
     const replayId = `${REPLAY_PREFIX}_${randomUUID().slice(0, 8)}`;

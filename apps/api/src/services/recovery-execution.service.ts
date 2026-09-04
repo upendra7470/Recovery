@@ -12,6 +12,7 @@ import { evaluateExecutionSafety } from '../domain/recovery-execution.js';
 import type { RecoveryDecisionRow } from '../domain/recovery-decision.js';
 import type { RecoveryOpportunityRow } from '../domain/recovery-opportunity.js';
 import { requireTransition } from '../execution/state-machine.js';
+import { InternalError } from '../lib/errors.js';
 import type { RecoveryDecisionService } from './recovery-decision.service.js';
 import type { RecoveryExecutionRepository } from '../repositories/recovery-execution.repository.js';
 import type { RecoveryOpportunityRepository } from '../repositories/recovery-opportunity.repository.js';
@@ -547,11 +548,12 @@ function toEligibility(verdict: ExecutionSafetyVerdict): ExecutionEligibility {
   if (verdict.allowed) {
     return { eligible: true, action: verdict.action, reason: null, detail: null };
   }
+  const { action, reason, detail } = verdict;
   return {
     eligible: false,
-    action: verdict.action,
-    reason: verdict.reason,
-    detail: verdict.detail,
+    action,
+    reason,
+    detail,
   };
 }
 
@@ -576,7 +578,7 @@ function mapToScheduledOutcome(result: ExecutionRequestResult): ScheduledRunResu
       return { outcome: 'cancelled', execution: result.execution, reason: result.reason };
     default:
       // Manual-only outcomes cannot occur on the scheduled path.
-      throw new Error(`Unexpected outcome on scheduled path: ${String(result.outcome)}`);
+      throw new InternalError(`Unexpected outcome on scheduled path: ${String(result.outcome)}`);
   }
 }
 

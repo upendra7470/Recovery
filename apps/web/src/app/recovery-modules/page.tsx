@@ -33,17 +33,17 @@ function ModuleCard({ mod }: { mod: RecoveryModuleSummary }) {
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm hover:shadow-md transition-shadow">
-      <div className="flex items-start justify-between mb-4">
-        <div className="flex items-center gap-3">
-          <span className="text-2xl" aria-hidden="true">{MODULE_ICONS[info.icon] ?? '\u{1F4CA}'}</span>
-          <div>
-            <h3 className="text-lg font-semibold text-slate-900">{info.name}</h3>
+      <div className="flex items-start justify-between gap-3 mb-4">
+        <div className="flex items-center gap-3 min-w-0">
+          <span className="text-2xl shrink-0" aria-hidden="true">{MODULE_ICONS[info.icon] ?? '\u{1F4CA}'}</span>
+          <div className="min-w-0">
+            <h3 className="text-lg font-semibold text-slate-900 truncate">{info.name}</h3>
             <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${badgeColor}`}>
               {info.type.replace(/_/g, ' ')}
             </span>
           </div>
         </div>
-        <div className="text-right">
+        <div className="text-right shrink-0">
           <div className="text-2xl font-bold text-slate-900">{mod.opportunitiesCount}</div>
           <div className="text-xs text-slate-500">opportunities</div>
         </div>
@@ -51,29 +51,29 @@ function ModuleCard({ mod }: { mod: RecoveryModuleSummary }) {
 
       <p className="text-sm text-slate-600 mb-4 line-clamp-2">{info.description}</p>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
-        <div className="text-center">
-          <div className="text-lg font-semibold text-slate-900">{formatInr(m.recoverableRevenue)}</div>
+      <div className="grid grid-cols-2 gap-x-4 gap-y-3 mb-4">
+        <div className="min-w-0 text-center">
+          <div className="text-sm sm:text-base font-semibold text-slate-900 truncate">{formatInr(m.recoverableRevenue)}</div>
           <div className="text-xs text-slate-500">Recoverable</div>
         </div>
-        <div className="text-center">
-          <div className="text-lg font-semibold text-emerald-600">{formatInr(m.recoveredRevenue)}</div>
+        <div className="min-w-0 text-center">
+          <div className="text-sm sm:text-base font-semibold text-emerald-600 truncate">{formatInr(m.recoveredRevenue)}</div>
           <div className="text-xs text-slate-500">Recovered</div>
         </div>
-        <div className="text-center">
-          <div className="text-lg font-semibold text-indigo-600">{formatPercent(m.recoveryRate)}</div>
+        <div className="min-w-0 text-center">
+          <div className="text-sm sm:text-base font-semibold text-indigo-600 truncate">{formatPercent(m.recoveryRate)}</div>
           <div className="text-xs text-slate-500">Recovery Rate</div>
         </div>
-        <div className="text-center">
-          <div className="text-lg font-semibold text-amber-600">{m.blockedActions}</div>
+        <div className="min-w-0 text-center">
+          <div className="text-sm sm:text-base font-semibold text-amber-600 truncate">{m.blockedActions}</div>
           <div className="text-xs text-slate-500">Blocked</div>
         </div>
       </div>
 
-      <div className="flex items-center justify-between text-xs text-slate-500 border-t border-slate-100 pt-3">
-        <span>Trigger: {info.triggerEvent}</span>
-        <span>Primary: {info.primaryAction}</span>
-        <span>{m.humanReviews} reviews</span>
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-slate-500 border-t border-slate-100 pt-3">
+        <span className="truncate">Trigger: {info.triggerEvent}</span>
+        <span className="truncate">Primary: {info.primaryAction}</span>
+        <span className="shrink-0">{m.humanReviews} reviews</span>
       </div>
     </div>
   );

@@ -8,6 +8,11 @@ import {
   PAYMENT_AUTHORIZED_PAYLOAD,
   PAYMENT_CAPTURED_PAYLOAD,
   PAYMENT_FAILED_PAYLOAD,
+  PAYMENT_FUTURE_TIMESTAMP_PAYLOAD,
+  PAYMENT_MINIMAL_PAYLOAD,
+  PAYMENT_MISSING_ID_PAYLOAD,
+  PAYMENT_NEGATIVE_AMOUNT_PAYLOAD,
+  PAYMENT_ZERO_AMOUNT_PAYLOAD,
   UNSUPPORTED_EVENT_PAYLOAD,
   WEBHOOK_SECRET,
 } from '../fixtures/razorpay.js';
@@ -248,6 +253,55 @@ describe('RazorpayAdapter', () => {
         event: 'refund.created',
       });
       expect(adapter.supportsEvent('refund.created')).toBe(false);
+    });
+  });
+
+  describe('edge-case payloads', () => {
+    it('normalizes minimal payment payload with only required fields', () => {
+      const result = adapter.normalizeEvent(PAYMENT_MINIMAL_PAYLOAD);
+      expect(result).toMatchObject({
+        provider: 'razorpay',
+        eventType: 'payment.authorized',
+        providerPaymentId: 'pay_MINimal123',
+        amount: 10000,
+        currency: 'INR',
+        status: 'authorized',
+        providerOrderId: null,
+        method: null,
+        email: null,
+        contact: null,
+        bank: null,
+      });
+    });
+
+    it('normalizes zero-amount payment', () => {
+      const result = adapter.normalizeEvent(PAYMENT_ZERO_AMOUNT_PAYLOAD);
+      expect(result.amount).toBe(0);
+      expect(result.eventType).toBe('payment.failed');
+      expect(result.errorReason).toBe('invalid_amount');
+    });
+
+    it('normalizes negative-amount payment', () => {
+      const result = adapter.normalizeEvent(PAYMENT_NEGATIVE_AMOUNT_PAYLOAD);
+      expect(result.amount).toBe(-5000);
+      expect(result.eventType).toBe('payment.failed');
+      expect(result.errorSource).toBe('provider');
+    });
+
+    it('accepts payload missing id at envelope level (id validated on normalize)', () => {
+      expect(adapter.validatePayload(PAYMENT_MISSING_ID_PAYLOAD)).toEqual({
+        event: 'payment.failed',
+      });
+    });
+
+    it('rejects normalization of payload missing required id field', () => {
+      expect(() => adapter.normalizeEvent(PAYMENT_MISSING_ID_PAYLOAD)).toThrow('"id"');
+    });
+
+    it('normalizes future-timestamp payment', () => {
+      const result = adapter.normalizeEvent(PAYMENT_FUTURE_TIMESTAMP_PAYLOAD);
+      expect(result.occurredAt).toEqual(new Date(4102444800 * 1000));
+      expect(result.paymentCreatedAt).toEqual(new Date(4102444800 * 1000));
     });
   });
 });
