@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-misused-promises */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { FastifyInstance } from 'fastify';
 
@@ -15,7 +16,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   const app = await getApp();
 
   const url = req.url ?? '/';
-  const method = (req.method ?? 'GET') as string;
+  const method = req.method ?? 'GET';
 
   const body = await new Promise<Buffer>((resolve) => {
     const chunks: Buffer[] = [];
