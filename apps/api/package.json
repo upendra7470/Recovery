@@ -26,6 +26,7 @@
     "dotenv": "^17.4.2",
     "fastify": "^5.12.1",
     "pino": "^10.3.1",
+    "prisma": "6.12.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -33,7 +34,6 @@
     "eslint": "9.39.2",
     "eslint-config-prettier": "^10.1.8",
     "pino-pretty": "^13.0.0",
-    "prisma": "6.12.0",
     "tsx": "^4.23.12",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.68.0",
