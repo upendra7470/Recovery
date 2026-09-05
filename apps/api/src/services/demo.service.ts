@@ -1994,17 +1994,15 @@ export class DemoService {
   // -------------------------------------------------------------------------
 
   private async ensureDemoInfrastructure(): Promise<void> {
-    await this.db.$queryRaw`
-      INSERT INTO merchants (id, name, "createdAt", "updatedAt")
-      VALUES (${DEMO_MERCHANT_ID}::uuid, 'Demo Merchant (Synthetic)', NOW(), NOW())
-      ON CONFLICT (id) DO NOTHING
-    `;
-
-    await this.db.$queryRaw`
-      INSERT INTO payment_accounts (id, "merchantId", provider, environment, status, "displayName", "createdAt", "updatedAt")
-      VALUES (${DEMO_PAYMENT_ACCOUNT_ID}::uuid, ${DEMO_MERCHANT_ID}::uuid, 'razorpay', 'test', 'active', 'Demo Razorpay Account (Synthetic)', NOW(), NOW())
-      ON CONFLICT (id) DO NOTHING
-    `;
+    await this.db.merchant.upsertById({ id: DEMO_MERCHANT_ID, name: 'Demo Merchant (Synthetic)' });
+    await this.db.paymentAccount.upsertById({
+      id: DEMO_PAYMENT_ACCOUNT_ID,
+      merchantId: DEMO_MERCHANT_ID,
+      provider: 'razorpay',
+      environment: 'test',
+      status: 'active',
+      displayName: 'Demo Razorpay Account (Synthetic)',
+    });
   }
 
   private async createPaymentEvent(data: {
@@ -2089,56 +2087,19 @@ export class DemoService {
   }
 
   private async calculateMetrics(): Promise<DemoMetrics> {
-    const [oppSummary, executionSummary, decisionSummary] = await Promise.all([
-      this.db.$queryRaw`
-        SELECT
-          COUNT(*) FILTER (WHERE status = 'OPEN') as "openCount",
-          COUNT(*) FILTER (WHERE status = 'RECOVERED') as "recoveredCount",
-          COALESCE(SUM("amountAtRisk") FILTER (WHERE status = 'OPEN'), 0) as "riskSum",
-          COALESCE(SUM("amountAtRisk") FILTER (WHERE status = 'RECOVERED'), 0) as "recoveredSum",
-          COALESCE(SUM("amountAtRisk"), 0) as "totalSum"
-        FROM recovery_opportunities
-        WHERE "merchantId" = ${DEMO_MERCHANT_ID}::uuid
-      `,
-      this.db.$queryRaw`
-        SELECT
-          COUNT(*) FILTER (WHERE status = 'BLOCKED') as "blockedCount",
-          COUNT(*) FILTER (WHERE status = 'SUCCEEDED') as "succeededCount"
-        FROM recovery_executions
-        WHERE "merchantId" = ${DEMO_MERCHANT_ID}::uuid
-      `,
-      this.db.$queryRaw`
-        SELECT
-          COUNT(*) FILTER (WHERE "recommendedAction" = 'REVIEW') as "reviewCount"
-        FROM recovery_decisions
-        WHERE "merchantId" = ${DEMO_MERCHANT_ID}::uuid
-      `,
+    const [oppMetrics, execMetrics, reviewCount] = await Promise.all([
+      this.db.recoveryOpportunity.metricsByMerchant(DEMO_MERCHANT_ID),
+      this.db.recoveryExecution.executionMetricsByMerchant(DEMO_MERCHANT_ID),
+      this.db.recoveryDecision.countReviewByMerchant(DEMO_MERCHANT_ID),
     ]);
 
-    const oppRow = (oppSummary as Array<{
-      openCount: number | bigint;
-      recoveredCount: number | bigint;
-      riskSum: number | bigint;
-      recoveredSum: number | bigint;
-      totalSum: number | bigint;
-    }>)[0];
-
-    const execRow = (executionSummary as Array<{
-      blockedCount: number | bigint;
-      succeededCount: number | bigint;
-    }>)[0];
-
-    const decRow = (decisionSummary as Array<{
-      reviewCount: number | bigint;
-    }>)[0];
-
-    const openCount = Number(oppRow?.openCount ?? 0);
-    const recoveredCount = Number(oppRow?.recoveredCount ?? 0);
-    const revenueAtRisk = Number(oppRow?.riskSum ?? 0);
-    const recoveredRevenue = Number(oppRow?.recoveredSum ?? 0);
-    const recoverableRevenue = Number(oppRow?.totalSum ?? 0);
-    const blockedActions = Number(execRow?.blockedCount ?? 0);
-    const humanReviews = Number(decRow?.reviewCount ?? 0);
+    const openCount = oppMetrics.openCount;
+    const recoveredCount = oppMetrics.recoveredCount;
+    const revenueAtRisk = oppMetrics.riskSum;
+    const recoveredRevenue = oppMetrics.recoveredSum;
+    const recoverableRevenue = oppMetrics.totalSum;
+    const blockedActions = execMetrics.blockedCount;
+    const humanReviews = reviewCount;
 
     const totalClosed = revenueAtRisk + recoveredRevenue;
     const recoveryRate = totalClosed > 0 ? Math.round((recoveredRevenue / totalClosed) * 100) : 0;
@@ -2164,47 +2125,30 @@ export class DemoService {
     aiAdvice: number;
   }> {
     const [merchants, paymentEvents, opportunities, decisions, executions, aiAdvice] = await Promise.all([
-      this.db.$queryRaw`SELECT COUNT(*) as count FROM merchants WHERE id = ${DEMO_MERCHANT_ID}::uuid`,
-      this.db.$queryRaw`SELECT COUNT(*) as count FROM payment_events WHERE "merchantId" = ${DEMO_MERCHANT_ID}::uuid`,
-      this.db.$queryRaw`SELECT COUNT(*) as count FROM recovery_opportunities WHERE "merchantId" = ${DEMO_MERCHANT_ID}::uuid`,
-      this.db.$queryRaw`SELECT COUNT(*) as count FROM recovery_decisions WHERE "merchantId" = ${DEMO_MERCHANT_ID}::uuid`,
-      this.db.$queryRaw`SELECT COUNT(*) as count FROM recovery_executions WHERE "merchantId" = ${DEMO_MERCHANT_ID}::uuid`,
-      this.db.$queryRaw`SELECT COUNT(*) as count FROM recovery_ai_advice WHERE "merchantId" = ${DEMO_MERCHANT_ID}::uuid`,
+      this.db.merchant.count().then(c => c > 0 ? 1 : 0),
+      this.db.paymentEvent.countByMerchant(DEMO_MERCHANT_ID),
+      this.db.recoveryOpportunity.countByMerchant(DEMO_MERCHANT_ID),
+      this.db.recoveryDecision.countByMerchant(DEMO_MERCHANT_ID),
+      this.db.recoveryExecution.countByMerchant(DEMO_MERCHANT_ID),
+      this.db.recoveryAIAdvice.countByMerchant(DEMO_MERCHANT_ID),
     ]);
 
-    const getCount = (result: unknown): number => {
-      const rows = result as Array<{ count: number | bigint }>;
-      return Number(rows[0]?.count ?? 0);
-    };
-
-    return {
-      merchants: getCount(merchants),
-      paymentEvents: getCount(paymentEvents),
-      opportunities: getCount(opportunities),
-      decisions: getCount(decisions),
-      executions: getCount(executions),
-      aiAdvice: getCount(aiAdvice),
-    };
+    return { merchants, paymentEvents, opportunities, decisions, executions, aiAdvice };
   }
 
   /**
    * Internal reset — removes all demo data.
    */
   private async resetInternal(): Promise<{ deleted: number }> {
-    let deleted = 0;
-
-    // Clean up all demo data in reverse dependency order
-    await this.db.$queryRaw`DELETE FROM recovery_executions WHERE "merchantId" = ${DEMO_MERCHANT_ID}::uuid`;
-    await this.db.$queryRaw`DELETE FROM recovery_ai_advice WHERE "merchantId" = ${DEMO_MERCHANT_ID}::uuid`;
-    await this.db.$queryRaw`DELETE FROM recovery_decisions WHERE "merchantId" = ${DEMO_MERCHANT_ID}::uuid`;
-    await this.db.$queryRaw`DELETE FROM recovery_opportunities WHERE "merchantId" = ${DEMO_MERCHANT_ID}::uuid`;
-    await this.db.$queryRaw`DELETE FROM payment_events WHERE "merchantId" = ${DEMO_MERCHANT_ID}::uuid`;
-    await this.db.$queryRaw`DELETE FROM merchant_strategy_memory WHERE "merchantId" = ${DEMO_MERCHANT_ID}::uuid`;
-    await this.db.$queryRaw`DELETE FROM payment_accounts WHERE id = ${DEMO_PAYMENT_ACCOUNT_ID}::uuid`;
-    await this.db.$queryRaw`DELETE FROM merchants WHERE id = ${DEMO_MERCHANT_ID}::uuid`;
-
-    deleted = 1;
-    return { deleted };
+    await this.db.recoveryExecution.deleteByMerchant(DEMO_MERCHANT_ID);
+    await this.db.recoveryAIAdvice.deleteByMerchant(DEMO_MERCHANT_ID);
+    await this.db.recoveryDecision.deleteByMerchant(DEMO_MERCHANT_ID);
+    await this.db.recoveryOpportunity.deleteByMerchant(DEMO_MERCHANT_ID);
+    await this.db.paymentEvent.deleteByMerchant(DEMO_MERCHANT_ID);
+    await this.db.merchantStrategyMemory.deleteByMerchant(DEMO_MERCHANT_ID);
+    await this.db.paymentAccount.deleteByMerchant(DEMO_MERCHANT_ID);
+    await this.db.merchant.deleteById({ id: DEMO_MERCHANT_ID });
+    return { deleted: 1 };
   }
 }
 

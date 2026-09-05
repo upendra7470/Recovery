@@ -139,6 +139,8 @@ export interface PaymentEventStore {
     take?: number;
     orderBy?: 'asc' | 'desc';
   }): Promise<PaymentEventRow[]>;
+  countByMerchant(merchantId: string): Promise<number>;
+  deleteByMerchant(merchantId: string): Promise<number>;
 }
 
 /** Read-only lookup boundary for payment accounts during ingestion. */
@@ -148,4 +150,7 @@ export interface PaymentAccountLookupStore {
     externalAccountId: string
   ): Promise<AccountReference | null>;
   findById(id: string): Promise<AccountReference | null>;
+  upsertById(args: { id: string; merchantId: string; provider: string; environment: string; status: string; displayName: string }): Promise<AccountReference>;
+  countByMerchant(merchantId: string): Promise<number>;
+  deleteByMerchant(merchantId: string): Promise<number>;
 }

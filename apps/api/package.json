@@ -14,8 +14,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "prisma:generate": "prisma generate",
+    "prisma:generate:sqlite": "prisma generate --schema prisma/schema.sqlite.prisma",
     "db:migrate:dev": "prisma migrate dev",
-    "db:migrate:deploy": "prisma migrate deploy"
+    "db:migrate:deploy": "prisma migrate deploy",
+    "db:push:sqlite": "prisma db push --schema prisma/schema.sqlite.prisma --accept-data-loss"
   },
   "prisma": {
     "schema": "prisma/schema.prisma"

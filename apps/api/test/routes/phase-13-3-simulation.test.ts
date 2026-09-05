@@ -79,6 +79,14 @@ class InMemoryPaymentEventStore {
     return rows;
   }
 
+  async countByMerchant(): Promise<number> {
+    return 0;
+  }
+
+  async deleteByMerchant(): Promise<number> {
+    return 0;
+  }
+
   get size() {
     return this.rows.size;
   }
@@ -91,6 +99,18 @@ class InMemoryPaymentAccountStore implements PaymentAccountLookupStore {
 
   async findById(): Promise<AccountReference | null> {
     return null;
+  }
+
+  async upsertById(args: { id: string; merchantId: string }): Promise<AccountReference> {
+    return { id: args.id, merchantId: args.merchantId };
+  }
+
+  async countByMerchant(): Promise<number> {
+    return 0;
+  }
+
+  async deleteByMerchant(): Promise<number> {
+    return 0;
   }
 }
 

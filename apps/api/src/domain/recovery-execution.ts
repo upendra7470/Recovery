@@ -329,6 +329,9 @@ export interface RecoveryExecutionStore {
   listAll(args: { merchantId?: string }): Promise<RecoveryExecutionRow[]>;
   countByStatus(): Promise<{ status: ExecutionStatus; count: number }[]>;
   countRetryAttempts(opportunityId: string): Promise<number>;
+  countByMerchant(merchantId: string): Promise<number>;
+  executionMetricsByMerchant(merchantId: string): Promise<{ blockedCount: number; succeededCount: number }>;
+  deleteByMerchant(merchantId: string): Promise<number>;
 }
 
 // ---------------------------------------------------------------------------

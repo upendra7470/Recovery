@@ -45,4 +45,6 @@ export interface MerchantStore {
   findUnique(args: { where: { id: string } }): Promise<MerchantRow | null>;
   findMany(args?: { take?: number; skip?: number }): Promise<MerchantRow[]>;
   count(): Promise<number>;
+  upsertById(args: { id: string; name: string }): Promise<MerchantRow>;
+  deleteById(args: { id: string }): Promise<boolean>;
 }

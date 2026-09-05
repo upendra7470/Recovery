@@ -123,12 +123,8 @@ When RecoveryOS reports recovered revenue, that number comes from **verified, pe
 ### Setup
 
 ```bash
-git clone <repo-url> && cd recoveryos
-npm install
-docker compose up -d db
-cp .env.example .env
-# In .env, set: DEMO_MODE_ENABLED=true
-npm run db:migrate:deploy
+git clone https://github.com/upendra7470/Recovery.git
+cd Recovery
 npm run dev
 ```
 
@@ -231,7 +227,8 @@ Judge Mode provides controlled, reproducible scenarios for evaluating the full R
 └─────────────────────────────────────────────────────────┘
                          │
               ┌──────────┴──────────┐
-              │    PostgreSQL 16     │
+               │  PostgreSQL (prod)    │
+               │  SQLite (local dev)  │
               │  13 models │ Prisma  │
               └─────────────────────┘
 ```
@@ -416,14 +413,14 @@ In demo mode, the `DemoRetryAdapter` handles all execution without external API 
 |-------|-----------|
 | Frontend | Next.js 16.3 (App Router), React 19, Tailwind CSS 4.3 |
 | API | Fastify 5.12, TypeScript 5.9 |
-| Database | PostgreSQL 16 |
+| Database | SQLite (local dev), PostgreSQL 16 (production) |
 | ORM | Prisma 6.12 |
 | AI Advisory | OpenAI-compatible API (opt-in) |
 | Testing | Vitest 4.1 |
 | Validation | Zod 4.4 |
 | Logging | Pino 10 |
 | CI | GitHub Actions |
-| Infrastructure | Docker, Docker Compose |
+| Deployment | Docker, Docker Compose |
 
 ---
 
@@ -469,39 +466,44 @@ recoveryos/
 
 ## Running Locally
 
-### Requirements
+### Prerequisites
 
-- Node.js ≥ 20
-- Docker (for PostgreSQL)
+- **Node.js ≥ 20** and npm
 
-### Setup
+*No Docker, PostgreSQL, or external services required for local development.*
+
+### Quick Start
 
 ```bash
-# Clone and install
-git clone <repo-url> && cd recoveryos
-npm install
-
-# Start PostgreSQL
-docker compose up -d db
-
-# Configure environment
-cp .env.example .env
-
-# Run migrations
-npm run db:migrate:deploy
-
-# Start development servers
+git clone https://github.com/upendra7470/Recovery.git
+cd Recovery
 npm run dev
 ```
 
+That's it. The `npm run dev` command automatically:
+
+1. Installs dependencies (if missing)
+2. Creates local `.env` files with SQLite database URL
+3. Generates Prisma Client for SQLite
+4. Pushes schema to local SQLite database (`apps/api/prisma/dev.db`)
+5. Starts the API and web development servers
+
+**No Docker required.** Local development uses SQLite — zero external dependencies.
+
 **API:** http://localhost:4000 · **Web:** http://localhost:3000
 
-### With Docker Compose (full stack)
+### What happens on subsequent runs
 
-```bash
-cp .env.example .env
-docker compose up --build
-```
+Running `npm run dev` again is idempotent — it reuses existing dependencies, `.env` files, and the SQLite database. No data is lost or duplicated.
+
+### Troubleshooting
+
+| Problem | Fix |
+|---------|-----|
+| `npm install failed` | Check Node.js version: `node --version` (requires ≥ 20) |
+| `Prisma generation failed` | Run `npx prisma generate --schema apps/api/prisma/schema.sqlite.prisma` |
+| `Schema push failed` | Delete `apps/api/prisma/dev.db` and retry `npm run dev` |
+| `Port 4000 in use` | Kill the process: `lsof -ti:4000 \| xargs kill` |
 
 ---
 

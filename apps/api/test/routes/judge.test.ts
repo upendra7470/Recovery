@@ -32,11 +32,16 @@ class InMemoryPaymentEventStore {
   async findById(id: string): Promise<PaymentEventRow | null> { return this.rows.get(id) ?? null; }
   async findRelatedByOrderOrPayment(): Promise<PaymentEventRow[]> { return []; }
   async findMany(): Promise<PaymentEventRow[]> { return []; }
+  async countByMerchant(): Promise<number> { return 0; }
+  async deleteByMerchant(): Promise<number> { return 0; }
 }
 
 class InMemoryPaymentAccountStore implements PaymentAccountLookupStore {
   async findActiveByExternalId(): Promise<AccountReference | null> { return null; }
   async findById(): Promise<AccountReference | null> { return null; }
+  async upsertById(args: { id: string; merchantId: string }): Promise<AccountReference> { return { id: args.id, merchantId: args.merchantId }; }
+  async countByMerchant(): Promise<number> { return 0; }
+  async deleteByMerchant(): Promise<number> { return 0; }
 }
 
 class InMemorySimulationRunStore implements SimulationRunStore {

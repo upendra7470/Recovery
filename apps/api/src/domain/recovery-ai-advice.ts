@@ -174,6 +174,8 @@ export interface RecoveryAIAdviceStore {
     model: string;
   }): Promise<RecoveryAIAdviceRow | null>;
   findByDecisionId(decisionId: string): Promise<RecoveryAIAdviceRow | null>;
+  countByMerchant(merchantId: string): Promise<number>;
+  deleteByMerchant(merchantId: string): Promise<number>;
 }
 
 // ---------------------------------------------------------------------------

@@ -193,6 +193,9 @@ export interface RecoveryDecisionStore {
   countByPriority(priority: DecisionPriority, merchantId?: string): Promise<number>;
   countByRecommendedAction(action: RecommendedAction, merchantId?: string): Promise<number>;
   averageConfidence(merchantId?: string): Promise<number | null>;
+  countByMerchant(merchantId: string): Promise<number>;
+  countReviewByMerchant(merchantId: string): Promise<number>;
+  deleteByMerchant(merchantId: string): Promise<number>;
 }
 
 export const decisionParamsSchema = z.object({

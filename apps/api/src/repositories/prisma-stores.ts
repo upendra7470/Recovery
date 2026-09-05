@@ -38,6 +38,10 @@ import type {
   MerchantStrategyMemoryStore,
 } from '../domain/merchant-memory.js';
 import type {
+  MerchantRow,
+  MerchantStore,
+} from '../domain/merchant.js';
+import type {
   NewSimulationRunData,
   SimulationRunRow,
   SimulationRunStore,
@@ -105,6 +109,13 @@ export function createPrismaPaymentEventStore(client: PrismaClient): PaymentEven
       });
       return rows;
     },
+    async countByMerchant(merchantId) {
+      return client.paymentEvent.count({ where: { merchantId } });
+    },
+    async deleteByMerchant(merchantId) {
+      const result = await client.paymentEvent.deleteMany({ where: { merchantId } });
+      return result.count;
+    },
   };
 }
 
@@ -125,6 +136,28 @@ export function createPrismaPaymentAccountLookupStore(
         select: { id: true, merchantId: true },
       });
       return row ? toAccountReference(row) : null;
+    },
+    async upsertById({ id, merchantId, provider, environment, status, displayName }) {
+      const row = await client.paymentAccount.upsert({
+        where: { id },
+        create: {
+          id,
+          merchantId,
+          provider: provider as 'razorpay',
+          environment: environment as 'test' | 'production',
+          status: status as 'active' | 'inactive',
+          displayName,
+        },
+        update: {},
+      });
+      return toAccountReference(row);
+    },
+    async countByMerchant(merchantId) {
+      return client.paymentAccount.count({ where: { merchantId } });
+    },
+    async deleteByMerchant(merchantId) {
+      const result = await client.paymentAccount.deleteMany({ where: { merchantId } });
+      return result.count;
     },
   };
 }
@@ -251,6 +284,38 @@ export function createPrismaRecoveryOpportunityStore(
       }
       return { total, recovered };
     },
+    async countByMerchant(merchantId) {
+      return client.recoveryOpportunity.count({ where: { merchantId } });
+    },
+    async deleteByMerchant(merchantId) {
+      const result = await client.recoveryOpportunity.deleteMany({ where: { merchantId } });
+      return result.count;
+    },
+    async metricsByMerchant(merchantId) {
+      const [openAgg, recoveredAgg, totalAgg] = await Promise.all([
+        client.recoveryOpportunity.aggregate({
+          where: { merchantId, status: 'OPEN' },
+          _count: true,
+          _sum: { amountAtRisk: true },
+        }),
+        client.recoveryOpportunity.aggregate({
+          where: { merchantId, status: 'RECOVERED' },
+          _count: true,
+          _sum: { amountAtRisk: true },
+        }),
+        client.recoveryOpportunity.aggregate({
+          where: { merchantId },
+          _sum: { amountAtRisk: true },
+        }),
+      ]);
+      return {
+        openCount: openAgg._count,
+        recoveredCount: recoveredAgg._count,
+        riskSum: Number(openAgg._sum.amountAtRisk ?? 0),
+        recoveredSum: Number(recoveredAgg._sum.amountAtRisk ?? 0),
+        totalSum: Number(totalAgg._sum.amountAtRisk ?? 0),
+      };
+    },
   };
 }
 
@@ -367,6 +432,16 @@ export function createPrismaRecoveryDecisionStore(client: PrismaClient): Recover
       });
       return aggregated._avg.confidence ?? null;
     },
+    async countByMerchant(merchantId) {
+      return client.recoveryDecision.count({ where: { merchantId } });
+    },
+    async countReviewByMerchant(merchantId) {
+      return client.recoveryDecision.count({ where: { merchantId, recommendedAction: 'REVIEW' } });
+    },
+    async deleteByMerchant(merchantId) {
+      const result = await client.recoveryDecision.deleteMany({ where: { merchantId } });
+      return result.count;
+    },
   };
 }
 
@@ -443,6 +518,13 @@ export function createPrismaRecoveryAIAdviceStore(
         orderBy: { createdAt: 'desc' },
       });
       return row ? toAdviceRow(row) : null;
+    },
+    async countByMerchant(merchantId) {
+      return client.recoveryAIAdvice.count({ where: { merchantId } });
+    },
+    async deleteByMerchant(merchantId) {
+      const result = await client.recoveryAIAdvice.deleteMany({ where: { merchantId } });
+      return result.count;
     },
   };
 }
@@ -568,6 +650,20 @@ export function createPrismaRecoveryExecutionStore(
       return client.recoveryExecution.count({
         where: { opportunityId, action: 'RETRY', status: { not: 'BLOCKED' } },
       });
+    },
+    async countByMerchant(merchantId) {
+      return client.recoveryExecution.count({ where: { merchantId } });
+    },
+    async executionMetricsByMerchant(merchantId) {
+      const [blocked, succeeded] = await Promise.all([
+        client.recoveryExecution.count({ where: { merchantId, status: 'BLOCKED' } }),
+        client.recoveryExecution.count({ where: { merchantId, status: 'SUCCEEDED' } }),
+      ]);
+      return { blockedCount: blocked, succeededCount: succeeded };
+    },
+    async deleteByMerchant(merchantId) {
+      const result = await client.recoveryExecution.deleteMany({ where: { merchantId } });
+      return result.count;
     },
   };
 }
@@ -866,6 +962,46 @@ export function createPrismaMerchantStrategyMemoryStore(
         where: { merchantId },
       });
       return result.count;
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Merchant Store
+// ---------------------------------------------------------------------------
+
+export function createPrismaMerchantStore(client: PrismaClient): MerchantStore {
+  return {
+    async create({ data }) {
+      const row: MerchantRow = await client.merchant.create({ data });
+      return row;
+    },
+    async findUnique({ where }) {
+      const row = await client.merchant.findUnique({ where });
+      return row ?? null;
+    },
+    async findMany(args) {
+      const rows = await client.merchant.findMany({
+        take: args?.take ?? 20,
+        skip: args?.skip ?? 0,
+        orderBy: { createdAt: 'desc' },
+      });
+      return rows;
+    },
+    async count() {
+      return client.merchant.count();
+    },
+    async upsertById({ id, name }) {
+      const row = await client.merchant.upsert({
+        where: { id },
+        create: { id, name },
+        update: {},
+      });
+      return row;
+    },
+    async deleteById({ id }) {
+      const result = await client.merchant.delete({ where: { id } });
+      return result !== null;
     },
   };
 }

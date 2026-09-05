@@ -74,12 +74,17 @@ function makeStores() {
     ),
     findById: vi.fn(async (): Promise<PaymentEventRow | null> => null),
     findRelatedByOrderOrPayment: vi.fn(async (): Promise<PaymentEventRow[]> => []),
+    countByMerchant: vi.fn(async () => 0),
+    deleteByMerchant: vi.fn(async () => 0),
   };
   const accounts = {
     findActiveByExternalId: vi.fn(
       async (): Promise<{ id: string; merchantId: string } | null> => null
     ),
     findById: vi.fn(async (): Promise<{ id: string; merchantId: string } | null> => null),
+    upsertById: vi.fn(async (args: { id: string; merchantId: string }) => ({ id: args.id, merchantId: args.merchantId })),
+    countByMerchant: vi.fn(async () => 0),
+    deleteByMerchant: vi.fn(async () => 0),
   };
   return { events, accounts };
 }

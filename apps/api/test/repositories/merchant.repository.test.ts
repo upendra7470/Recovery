@@ -22,6 +22,8 @@ function createStore(overrides: Partial<MerchantStore> = {}): MerchantStore & {
     findUnique: vi.fn(async () => null),
     findMany: vi.fn(async () => []),
     count: vi.fn(async () => 0),
+    upsertById: vi.fn(async (args: { id: string; name: string }) => row({ id: args.id, name: args.name })),
+    deleteById: vi.fn(async () => true),
     ...overrides,
   };
   return store as MerchantStore & { create: ReturnType<typeof vi.fn> };

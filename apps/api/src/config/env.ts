@@ -28,10 +28,13 @@ export const envSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(4000),
   HOST: z.string().min(1).default('0.0.0.0'),
   DATABASE_URL: z
-    .url()
+    .string()
     .refine(
-      (value) => value.startsWith('postgresql://') || value.startsWith('postgres://'),
-      { message: 'Must be a PostgreSQL connection string' }
+      (value) =>
+        value.startsWith('postgresql://') ||
+        value.startsWith('postgres://') ||
+        value.startsWith('file:'),
+      { message: 'Must be a PostgreSQL connection string or SQLite file: URL' }
     ),
   LOG_LEVEL: logLevelSchema.default('info'),
   // Optional at the config layer so existing deployments/tests keep working;

@@ -152,4 +152,7 @@ export interface RecoveryOpportunityStore {
     total: number;
     recovered: number;
   }>;
+  countByMerchant(merchantId: string): Promise<number>;
+  deleteByMerchant(merchantId: string): Promise<number>;
+  metricsByMerchant(merchantId: string): Promise<{ openCount: number; recoveredCount: number; riskSum: number; recoveredSum: number; totalSum: number }>;
 }

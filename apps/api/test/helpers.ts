@@ -56,6 +56,10 @@ import type {
   MerchantStrategyMemoryStore,
 } from '../src/domain/merchant-memory.js';
 import type {
+  MerchantRow,
+  MerchantStore,
+} from '../src/domain/merchant.js';
+import type {
   NewSimulationRunData,
   SimulationRunRow,
   SimulationRunStore,
@@ -116,6 +120,30 @@ export function createAuthenticationStoreMock(
     })),
     findActiveSessionByTokenHash: vi.fn(async (): Promise<{ session: SessionRow; user: UserRow; memberships: MerchantMembershipRow[] } | null> => null),
     revokeSession: vi.fn(async () => {}),
+    ...overrides,
+  };
+}
+
+export function createMerchantStoreMock(
+  overrides: Partial<MerchantStore> = {}
+): MerchantStore {
+  return {
+    create: vi.fn(async (args: { data: { name: string } }) => ({
+      id: randomUUID(),
+      name: args.data.name,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })),
+    findUnique: vi.fn(async (): Promise<MerchantRow | null> => null),
+    findMany: vi.fn(async () => []),
+    count: vi.fn(async () => 0),
+    upsertById: vi.fn(async (args: { id: string; name: string }) => ({
+      id: args.id,
+      name: args.name,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })),
+    deleteById: vi.fn(async () => true),
     ...overrides,
   };
 }
@@ -344,6 +372,7 @@ export function createDbExecutorMock(
     recoveryExecution:
       overrides.recoveryExecution ?? createRecoveryExecutionStoreMock(),
     auth: overrides.auth ?? createAuthenticationStoreMock(),
+    merchant: overrides.merchant ?? createMerchantStoreMock(),
     merchantStrategyMemory:
       overrides.merchantStrategyMemory ?? createMerchantStrategyMemoryStoreMock(),
     simulationRun:
@@ -375,6 +404,9 @@ export function createRecoveryExecutionStoreMock(
     listAll: vi.fn(async (): Promise<RecoveryExecutionRow[]> => []),
     countByStatus: vi.fn(async () => []),
     countRetryAttempts: vi.fn(async () => 0),
+    countByMerchant: vi.fn(async () => 0),
+    executionMetricsByMerchant: vi.fn(async () => ({ blockedCount: 0, succeededCount: 0 })),
+    deleteByMerchant: vi.fn(async () => 0),
     ...overrides,
   };
 }
@@ -386,6 +418,8 @@ export function createRecoveryAIAdviceStoreMock(
     upsert: vi.fn(async (data: NewRecoveryAIAdviceData) => sampleAdviceRow(data)),
     findByDecision: vi.fn(async (): Promise<RecoveryAIAdviceRow | null> => null),
     findByDecisionId: vi.fn(async (): Promise<RecoveryAIAdviceRow | null> => null),
+    countByMerchant: vi.fn(async () => 0),
+    deleteByMerchant: vi.fn(async () => 0),
     ...overrides,
   };
 }
@@ -404,6 +438,9 @@ export function createRecoveryDecisionStoreMock(
     countByPriority: vi.fn(async () => 0),
     countByRecommendedAction: vi.fn(async () => 0),
     averageConfidence: vi.fn(async () => null),
+    countByMerchant: vi.fn(async () => 0),
+    countReviewByMerchant: vi.fn(async () => 0),
+    deleteByMerchant: vi.fn(async () => 0),
     ...overrides,
   };
 }
@@ -523,6 +560,37 @@ export class InMemoryRecoveryDecisionStore implements RecoveryDecisionStore {
     }
     return matches.sort((a, b) => b.evaluatedAt.getTime() - a.evaluatedAt.getTime());
   }
+
+  async countByMerchant(merchantId: string): Promise<number> {
+    let count = 0;
+    for (const row of this.rows.values()) {
+      if (row.merchantId === merchantId) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  async countReviewByMerchant(merchantId: string): Promise<number> {
+    let count = 0;
+    for (const row of this.rows.values()) {
+      if (row.merchantId === merchantId && row.recommendedAction === 'REVIEW') {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  async deleteByMerchant(merchantId: string): Promise<number> {
+    let count = 0;
+    for (const [key, row] of this.rows.entries()) {
+      if (row.merchantId === merchantId) {
+        this.rows.delete(key);
+        count += 1;
+      }
+    }
+    return count;
+  }
 }
 
 function sampleDecisionRow(overrides: Partial<RecoveryDecisionRow> = {}): RecoveryDecisionRow {  return {
@@ -577,6 +645,8 @@ export function createPaymentEventStoreMock(
     findByProviderEventId: vi.fn(async (): Promise<PaymentEventRow | null> => null),
     findById: vi.fn(async (): Promise<PaymentEventRow | null> => null),
     findRelatedByOrderOrPayment: vi.fn(async (): Promise<PaymentEventRow[]> => []),
+    countByMerchant: vi.fn(async () => 0),
+    deleteByMerchant: vi.fn(async () => 0),
     ...overrides,
   };
 }
@@ -591,6 +661,9 @@ export function createAccountLookupStoreMock(
   return {
     findActiveByExternalId,
     findById,
+    upsertById: vi.fn(async (args: { id: string; merchantId: string }) => ({ id: args.id, merchantId: args.merchantId })),
+    countByMerchant: vi.fn(async () => 0),
+    deleteByMerchant: vi.fn(async () => 0),
     ...overrides,
   };
 }
@@ -609,6 +682,9 @@ export function createRecoveryOpportunityStoreMock(
     summarizeByStatusAndCurrency: vi.fn(async () => []),
     countByType: vi.fn(async () => 0),
     outcomeStatsByType: vi.fn(async () => ({ total: 0, recovered: 0 })),
+    countByMerchant: vi.fn(async () => 0),
+    deleteByMerchant: vi.fn(async () => 0),
+    metricsByMerchant: vi.fn(async () => ({ openCount: 0, recoveredCount: 0, riskSum: 0, recoveredSum: 0, totalSum: 0 })),
     ...overrides,
   };
 }
@@ -680,6 +756,27 @@ export class InMemoryPaymentEventStore implements PaymentEventStore {
       }
     }
     return matches.sort((a, b) => a.eventCreatedAt.getTime() - b.eventCreatedAt.getTime());
+  }
+
+  async countByMerchant(merchantId: string): Promise<number> {
+    let count = 0;
+    for (const row of this.rows.values()) {
+      if (row.merchantId === merchantId) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  async deleteByMerchant(merchantId: string): Promise<number> {
+    let count = 0;
+    for (const [key, row] of this.rows.entries()) {
+      if (row.merchantId === merchantId) {
+        this.rows.delete(key);
+        count += 1;
+      }
+    }
+    return count;
   }
 }
 
@@ -844,6 +941,49 @@ export class InMemoryRecoveryOpportunityStore implements RecoveryOpportunityStor
     }
     return { total, recovered };
   }
+
+  async countByMerchant(merchantId: string): Promise<number> {
+    let count = 0;
+    for (const row of this.rows.values()) {
+      if (row.merchantId === merchantId) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  async deleteByMerchant(merchantId: string): Promise<number> {
+    let count = 0;
+    for (const [key, row] of this.rows.entries()) {
+      if (row.merchantId === merchantId) {
+        this.rows.delete(key);
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  async metricsByMerchant(merchantId: string): Promise<{ openCount: number; recoveredCount: number; riskSum: number; recoveredSum: number; totalSum: number }> {
+    let openCount = 0;
+    let recoveredCount = 0;
+    let riskSum = 0;
+    let recoveredSum = 0;
+    let totalSum = 0;
+    for (const row of this.rows.values()) {
+      if (row.merchantId !== merchantId) {
+        continue;
+      }
+      totalSum += row.amountAtRisk;
+      if (row.status === 'OPEN') {
+        openCount += 1;
+        riskSum += row.amountAtRisk;
+      } else if (row.status === 'RECOVERED') {
+        recoveredCount += 1;
+        recoveredSum += row.amountAtRisk;
+      }
+    }
+    return { openCount, recoveredCount, riskSum, recoveredSum, totalSum };
+  }
 }
 
 function sampleOpportunityRow(overrides: Partial<RecoveryOpportunityRow> = {}): RecoveryOpportunityRow {
@@ -961,6 +1101,27 @@ export class InMemoryRecoveryAIAdviceStore implements RecoveryAIAdviceStore {
       if (row.decisionId === decisionId) return row;
     }
     return null;
+  }
+
+  async countByMerchant(merchantId: string): Promise<number> {
+    let count = 0;
+    for (const row of this.rows.values()) {
+      if (row.merchantId === merchantId) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  async deleteByMerchant(merchantId: string): Promise<number> {
+    let count = 0;
+    for (const [key, row] of this.rows.entries()) {
+      if (row.merchantId === merchantId) {
+        this.rows.delete(key);
+        count += 1;
+      }
+    }
+    return count;
   }
 }
 
@@ -1241,6 +1402,43 @@ export class InMemoryRecoveryExecutionStore implements RecoveryExecutionStore {
     return [...this.rows.values()]
       .filter((row) => args.merchantId === undefined || row.merchantId === args.merchantId)
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  async countByMerchant(merchantId: string): Promise<number> {
+    let count = 0;
+    for (const row of this.rows.values()) {
+      if (row.merchantId === merchantId) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  async executionMetricsByMerchant(merchantId: string): Promise<{ blockedCount: number; succeededCount: number }> {
+    let blockedCount = 0;
+    let succeededCount = 0;
+    for (const row of this.rows.values()) {
+      if (row.merchantId !== merchantId) {
+        continue;
+      }
+      if (row.status === 'BLOCKED') {
+        blockedCount += 1;
+      } else if (row.status === 'SUCCEEDED') {
+        succeededCount += 1;
+      }
+    }
+    return { blockedCount, succeededCount };
+  }
+
+  async deleteByMerchant(merchantId: string): Promise<number> {
+    let count = 0;
+    for (const [key, row] of this.rows.entries()) {
+      if (row.merchantId === merchantId) {
+        this.rows.delete(key);
+        count += 1;
+      }
+    }
+    return count;
   }
 }
 

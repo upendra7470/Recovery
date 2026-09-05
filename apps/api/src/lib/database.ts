@@ -9,6 +9,7 @@ import type { RecoveryExecutionStore } from '../domain/recovery-execution.js';
 import type { AuthenticationStore } from '../domain/authentication.js';
 import type { MerchantStrategyMemoryStore } from '../domain/merchant-memory.js';
 import type { SimulationRunStore } from '../domain/simulation-run.js';
+import type { MerchantStore } from '../domain/merchant.js';
 
 export type DbQueryTag = (strings: TemplateStringsArray, ...values: unknown[]) => Promise<unknown>;
 
@@ -29,6 +30,7 @@ export interface AppDatabase extends DbExecutor {
   readonly recoveryAIAdvice: RecoveryAIAdviceStore;
   readonly recoveryExecution: RecoveryExecutionStore;
   readonly auth: AuthenticationStore;
+  readonly merchant: MerchantStore;
   readonly merchantStrategyMemory: MerchantStrategyMemoryStore;
   readonly simulationRun: SimulationRunStore;
 }

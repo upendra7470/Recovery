@@ -1,0 +1,471 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum PaymentProvider {
+  razorpay
+}
+
+enum PaymentAccountEnvironment {
+  test
+  production
+}
+
+enum PaymentAccountStatus {
+  active
+  inactive
+}
+
+/// Processing lifecycle of an ingested webhook event.
+/// Mirrors PaymentEventProcessingStatus in src/domain/payment-event.ts.
+enum ProcessingStatus {
+  pending
+  processed
+  duplicate
+  unsupported
+  failed
+}
+
+/// Category of revenue leakage identified by the deterministic detection
+/// engine. Mirrors RecoveryOpportunityType in src/domain/recovery-opportunity.ts.
+enum RecoveryOpportunityType {
+  FAILED_PAYMENT
+  SUBSCRIPTION_PAYMENT_FAILED
+  CHECKOUT_DROPOFF
+}
+
+/// Lifecycle of a recovery opportunity.
+/// Mirrors RecoveryOpportunityStatus in src/domain/recovery-opportunity.ts.
+enum RecoveryOpportunityStatus {
+  OPEN
+  RECOVERED
+  EXPIRED
+  DISMISSED
+}
+
+/// Operational urgency band derived from the decision score.
+/// Mirrors DecisionPriority in src/domain/recovery-decision.ts.
+enum DecisionPriority {
+  VERY_LOW
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+/// Controlled vocabulary of recommendations produced by the deterministic
+/// decision engine. Mirrors RecommendedAction in src/domain/recovery-decision.ts.
+enum RecommendedAction {
+  RETRY
+  WAIT
+  CUSTOMER_ACTION_REQUIRED
+  DO_NOT_RETRY
+  REVIEW
+  NO_ACTION
+}
+
+/// Lifecycle of stored AI advice. Only AVAILABLE rows are persisted today.
+/// Mirrors AIAdviceStatus in src/domain/recovery-ai-advice.ts.
+enum AIAdviceStatus {
+  AVAILABLE
+}
+
+/// Controlled execution lifecycle. Mirrors ExecutionStatus in
+/// src/domain/recovery-execution.ts; transitions are restricted by the pure
+/// state machine in src/execution/state-machine.ts.
+enum ExecutionStatus {
+  PENDING
+  AUTHORIZED
+  EXECUTING
+  SUCCEEDED
+  FAILED
+  BLOCKED
+  CANCELLED
+}
+
+/// What triggered an execution record. Mirrors ExecutionOrigin in
+/// src/domain/recovery-execution.ts.
+enum ExecutionOrigin {
+  MANUAL
+  AUTOMATED
+}
+
+/// Role of a user's membership in a merchant tenant.
+/// Mirrors UserRole in src/domain/authentication.ts.
+enum UserRole {
+  OWNER
+  OPERATOR
+  VIEWER
+}
+
+/// Aggregated strategy performance memory per merchant + strategy + failure type.
+/// Updated only after verified recovery outcomes — never before.
+enum MerchantMemoryStrategy {
+  RETRY
+  PAYMENT_LINK
+  ALTERNATE_METHOD
+  REVIEW
+  WAIT
+  CUSTOMER_ACTION_REQUIRED
+  DO_NOT_RETRY
+  NO_ACTION
+}
+
+/** Application user (human/operator identity). Mirrors domain/authentication.ts. */
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  /// scrypt parameters + salt + hash; NEVER plaintext. Format: scrypt:N:r:p:salt:hash.
+  passwordHash String
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  memberships  MerchantMembership[]
+  sessions     Session[]
+
+  @@map("users")
+}
+
+/// Explicit tenant membership with a server-side role — the ONLY source of
+/// authorization. Client-supplied merchantId is never trusted.
+model MerchantMembership {
+  id         String   @id @default(uuid())
+  userId     String
+  merchantId String
+  role       UserRole @default(VIEWER)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, merchantId])
+  @@index([merchantId])
+  @@map("merchant_memberships")
+}
+
+/// Server-side session state. Only the SHA-256 hash of the session token is
+/// stored; the raw token lives exclusively in an HttpOnly cookie.
+model Session {
+  id           String   @id @default(uuid())
+  userId       String
+  tokenHash    String   @unique
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model Merchant {
+  id              String                @id @default(uuid())
+  name            String
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  paymentAccounts PaymentAccount[]
+  paymentEvents   PaymentEvent[]
+  opportunities   RecoveryOpportunity[]
+  decisions       RecoveryDecision[]
+  aiAdvice        RecoveryAIAdvice[]
+  executions      RecoveryExecution[]
+  memberships     MerchantMembership[]
+  strategyMemory  MerchantStrategyMemory[]
+
+  @@map("merchants")
+}
+
+model PaymentAccount {
+  id                String                    @id @default(uuid())
+  merchantId        String
+  provider          PaymentProvider
+  environment       PaymentAccountEnvironment
+  status            PaymentAccountStatus      @default(active)
+  displayName       String?
+  externalAccountId String?
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+  merchant          Merchant                  @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  paymentEvents     PaymentEvent[]
+  opportunities     RecoveryOpportunity[]
+
+  @@unique([provider, environment, externalAccountId])
+  @@index([merchantId])
+  @@map("payment_accounts")
+}
+
+model PaymentEvent {
+  id                     String                @id @default(uuid())
+  paymentAccountId       String?
+  merchantId             String?
+  provider               PaymentProvider
+  providerEventId        String
+  eventType              String
+  providerPaymentId      String?
+  providerOrderId        String?
+  eventCreatedAt         DateTime
+  receivedAt             DateTime              @default(now())
+  payload                Json
+  normalizedData         Json?
+  signatureVerified      Boolean               @default(false)
+  processingStatus       ProcessingStatus      @default(pending)
+  processingAttempts     Int                   @default(0)
+  processedAt            DateTime?
+  failureReason          String?
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
+  paymentAccount         PaymentAccount?       @relation(fields: [paymentAccountId], references: [id], onDelete: SetNull)
+  merchant               Merchant?             @relation(fields: [merchantId], references: [id], onDelete: SetNull)
+  sourceOpportunities    RecoveryOpportunity[] @relation("OpportunitySourceEvent")
+  recoveredOpportunities RecoveryOpportunity[] @relation("OpportunityRecoveryEvent")
+
+  /// Idempotency: one record per provider event identity. Razorpay payloads do
+  /// not carry a dedicated event id, so the adapter derives a stable identity
+  /// from the event type + provider payment id (see RazorpayAdapter).
+  @@unique([provider, providerEventId])
+  @@index([paymentAccountId])
+  @@index([merchantId])
+  @@index([providerPaymentId])
+  @@index([processingStatus])
+  @@index([receivedAt])
+  @@map("payment_events")
+}
+
+model RecoveryOpportunity {
+  id                String                    @id @default(uuid())
+  merchantId        String?
+  paymentAccountId  String?
+  type              RecoveryOpportunityType
+  status            RecoveryOpportunityStatus @default(OPEN)
+  sourceEventId     String
+  providerPaymentId String?
+  providerOrderId   String?
+  /// Amount in the provider's smallest currency unit (paise for INR). Always
+  /// derived from the source payment event; never estimated.
+  amountAtRisk      Int
+  currency          String
+  reason            String
+  evidence          Json
+  /// Payment event that realized the revenue again (e.g. a captured retry),
+  /// required for RECOVERED status. Never fabricated.
+  recoveryEventId   String?
+  detectedAt        DateTime                  @default(now())
+  expiresAt         DateTime?
+  resolvedAt        DateTime?
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+  merchant          Merchant?                 @relation(fields: [merchantId], references: [id], onDelete: SetNull)
+  paymentAccount    PaymentAccount?           @relation(fields: [paymentAccountId], references: [id], onDelete: SetNull)
+  sourceEvent       PaymentEvent              @relation("OpportunitySourceEvent", fields: [sourceEventId], references: [id], onDelete: Cascade)
+  recoveryEvent     PaymentEvent?             @relation("OpportunityRecoveryEvent", fields: [recoveryEventId], references: [id], onDelete: SetNull)
+  decisions         RecoveryDecision[]
+  aiAdvice          RecoveryAIAdvice[]
+  executions        RecoveryExecution[]
+
+  /// Idempotency: one opportunity per (source event, detection category).
+  @@unique([sourceEventId, type])
+  @@index([merchantId])
+  @@index([status])
+  @@index([type])
+  @@index([detectedAt])
+  @@index([providerPaymentId])
+  @@index([providerOrderId])
+  @@map("recovery_opportunities")
+}
+
+model RecoveryDecision {
+  id                String             @id @default(uuid())
+  merchantId        String?
+  opportunityId     String
+  /// Engine version that produced this decision (e.g. "v1"). Decisions from
+  /// different engine versions must never be compared or mixed silently.
+  engineVersion     String
+  /// 0–100 operational priority score from transparent weighted factors.
+  score             Int
+  priority          DecisionPriority
+  /// 0–100 confidence in the recommendation's meaningfulness (NOT a success
+  /// probability). Low confidence pushes the engine toward REVIEW.
+  confidence        Int
+  recommendedAction RecommendedAction
+  /// Human-readable deterministic explanations derived from the factors.
+  reasons           Json
+  /// Structured factors: name, contribution, value, explanation.
+  factors           Json
+  /// Safety/quality flags with per-flag explanations.
+  riskFlags         Json
+  /// When the engine produced this assessment (passed explicitly — the engine
+  /// itself never reads the clock).
+  evaluatedAt       DateTime
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  merchant          Merchant?          @relation(fields: [merchantId], references: [id], onDelete: SetNull)
+  opportunity       RecoveryOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  aiAdvice          RecoveryAIAdvice[]
+  executions        RecoveryExecution[]
+
+  /// One current decision per (opportunity, engine version); re-evaluation
+  /// upserts. Append-only decision history is a future extension.
+  @@unique([opportunityId, engineVersion])
+  @@index([merchantId])
+  @@index([priority])
+  @@index([recommendedAction])
+  @@map("recovery_decisions")
+}
+
+model RecoveryAIAdvice {
+  id                String        @id @default(uuid())
+  merchantId        String?
+  opportunityId     String
+  /// The deterministic decision this advice was generated against.
+  decisionId        String
+  /// Informational provider label (e.g. "openai-compatible"). Never secrets.
+  provider          String
+  model             String
+  advisorVersion    String
+  promptVersion     String
+  status            AIAdviceStatus @default(AVAILABLE)
+  summary           String
+  explanation       String
+  nextStep          String
+  customerMessage   String?
+  operatorMessage   String?
+  /// Model self-reported confidence (0–100), clamped at the boundary. NOT a
+  /// success probability and never mixed with the deterministic confidence.
+  confidence        Int
+  warnings          Json
+  /// True when the deterministic safety guard constrained unsafe model text.
+  safetyConstrained Boolean       @default(false)
+  /// SHA-256 of the decision's safety-relevant content at generation time;
+  /// mismatch ⇒ stale advice ⇒ regenerate on next read.
+  decisionFingerprint String
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  merchant          Merchant?     @relation(fields: [merchantId], references: [id], onDelete: SetNull)
+  opportunity       RecoveryOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  decision          RecoveryDecision    @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+
+  /// One current advice per (deterministic decision, advisor version, model);
+  /// regeneration upserts. Raw provider responses are never stored.
+  @@unique([decisionId, advisorVersion, model])
+  @@index([merchantId])
+  @@index([opportunityId])
+  @@map("recovery_ai_advice")
+}
+
+model RecoveryExecution {
+  id                String           @id @default(uuid())
+  merchantId        String?
+  opportunityId     String
+  /// The fresh deterministic decision that authorized this execution.
+  decisionId        String
+  action            RecommendedAction
+  status            ExecutionStatus
+  origin            ExecutionOrigin  @default(MANUAL)
+  /// When this automated operation becomes due for the scheduler.
+  nextAttemptAt     DateTime?
+  scheduledAt       DateTime?
+  /// 1-based attempt number among non-blocked executions of the opportunity.
+  attempt           Int              @default(1)
+  /// Stable key (opportunity + decision + action + attempt) preventing
+  /// duplicate provider operations; enforced by the database.
+  idempotencyKey    String           @unique
+  provider          String?
+  providerPaymentId String?
+  requestedAt       DateTime         @default(now())
+  startedAt         DateTime?
+  completedAt       DateTime?
+  failureCode       String?
+  failureReason     String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  merchant          Merchant?        @relation(fields: [merchantId], references: [id], onDelete: SetNull)
+  opportunity       RecoveryOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  decision          RecoveryDecision    @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+
+  @@index([opportunityId])
+  @@index([merchantId])
+  @@index([decisionId])
+  @@index([status, nextAttemptAt])
+  @@index([createdAt])
+  @@map("recovery_executions")
+}
+
+/// Aggregated merchant-specific strategy performance evidence.
+/// One row per (merchant, strategy, failureType) combination.
+/// Updated ONLY after verified recovery outcomes — never before outcome verification.
+/// This table powers merchant-specific AI context and effectiveness scoring.
+model MerchantStrategyMemory {
+  id                  String               @id @default(uuid())
+  merchantId          String
+  strategy            MerchantMemoryStrategy
+  failureType         String
+  attempts            Int                  @default(0)
+  successes           Int                  @default(0)
+  failures            Int                  @default(0)
+  blocked             Int                  @default(0)
+  humanReviews        Int                  @default(0)
+  totalAmountAttempted Int                 @default(0)
+  totalAmountRecovered Int                 @default(0)
+  successRate         Float                @default(0)
+  recoveryRate        Float                @default(0)
+  sampleCount         Int                  @default(0)
+  confidence          Int                  @default(0)
+  effectivenessScore  Float                @default(0)
+  lastObservedAt      DateTime?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  merchant            Merchant             @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  /// One memory row per (merchant, strategy, failureType).
+  @@unique([merchantId, strategy, failureType])
+  @@index([merchantId])
+  @@index([effectivenessScore])
+  @@map("merchant_strategy_memory")
+}
+
+/// Status of a simulation run.
+enum SimulationRunStatus {
+  pending
+  running
+  completed
+  failed
+}
+
+/// Persistent record of a simulation run.
+/// Stores configuration and aggregate results for analytics.
+model SimulationRun {
+  id                  String             @id @default(uuid())
+  seed                Int
+  merchantCount       Int                @default(10)
+  eventsPerMerchant   Int                @default(100)
+  totalEvents         Int                @default(0)
+  status              SimulationRunStatus @default(pending)
+  startedAt           DateTime?
+  completedAt         DateTime?
+  processingDurationMs Int?
+
+  // Aggregate metrics (computed after replay)
+  processedEvents     Int                @default(0)
+  successfulPayments  Int                @default(0)
+  failedPayments      Int                @default(0)
+  opportunitiesDetected Int              @default(0)
+  executionsAttempted Int                @default(0)
+  executionsBlocked   Int                @default(0)
+  humanReviews        Int                @default(0)
+  recoveriesVerified  Int                @default(0)
+  revenueAtRisk       Int                @default(0)
+  recoverableRevenue  Int                @default(0)
+  recoveredRevenue    Int                @default(0)
+
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("simulation_runs")
+}

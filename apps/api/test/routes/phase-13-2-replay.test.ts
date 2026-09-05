@@ -220,6 +220,26 @@ class InMemoryRecoveryDecisionStore {
   async averageConfidence(): Promise<number> {
     return 0;
   }
+
+  async countByMerchant(): Promise<number> {
+    return 0;
+  }
+
+  async countReviewByMerchant(): Promise<number> {
+    return 0;
+  }
+
+  async deleteByMerchant(): Promise<number> {
+    return 0;
+  }
+
+  async listAll(): Promise<RecoveryDecisionRow[]> {
+    return [];
+  }
+
+  async findLatestByOpportunityIds(): Promise<RecoveryDecisionRow[]> {
+    return [];
+  }
 }
 
 class InMemoryRecoveryExecutionStore {
