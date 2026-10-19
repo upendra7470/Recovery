@@ -35,8 +35,8 @@ Deterministic Safety Policy Gate
     ↓
 ┌──────────────────────────────────────┐
 │  APPROVED  → Recovery Execution      │
-│  BLOCKED   → No action              │
-│  REVIEW    → Human decision         │
+│  BLOCKED   → No action               │
+│  REVIEW    → Human decision          │
 └──────────────────────────────────────┘
     ↓
 Payment Capture (simulated or real Razorpay)
